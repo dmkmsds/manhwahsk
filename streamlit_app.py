@@ -17,11 +17,10 @@ from transformers import AutoTokenizer, AutoModel
 
 # ------------------ LOAD GOOGLE CLOUD CREDENTIALS FROM SECRETS ------------------
 if "google_cloud" in st.secrets:
-    # Convert all secret values to strings
-    creds = {key: str(value) for key, value in st.secrets["google_cloud"].items()}
+    creds_dict = dict(st.secrets["google_cloud"])  # Already a dict
     creds_path = "temp_google_credentials.json"
     with open(creds_path, "w") as f:
-        json.dump(creds, f)
+        json.dump(creds_dict, f)
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
 
 # ------------------ HELPER FUNCTIONS FOR KOREAN DETECTION ------------------
