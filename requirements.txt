@@ -1,2 +1,6 @@
 torch
 torchvision
+google.cloud
+pypinyin
+jieba
+transformers
