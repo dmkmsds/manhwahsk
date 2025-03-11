@@ -25,7 +25,9 @@ if "google_cloud" in st.secrets:
 
 # ------------------ HELPER FUNCTIONS ------------------
 def is_all_korean(text):
-    """Returns True if all alphanumeric tokens in text are purely Korean."""
+    """
+    Returns True if all alphanumeric tokens in text are purely Korean.
+    """
     tokens = re.findall(r'\w+', text)
     if not tokens:
         return False
@@ -35,17 +37,22 @@ def is_all_korean(text):
     return True
 
 def filter_korean(text):
-    """Removes tokens containing any Korean character."""
+    """
+    Removes tokens that contain any Korean characters.
+    """
     tokens = text.split()
     filtered_tokens = [tok for tok in tokens if not re.search(r'[\uac00-\ud7a3]', tok)]
     return " ".join(filtered_tokens)
 
-# ------------------ GOOGLE CLOUD CLIENTS ------------------
+# ------------------ GOOGLE CLIENTS ------------------
 translation_client = translate.Client()
 vision_client = vision.ImageAnnotatorClient()
 
 def google_translate(text_en):
-    """Translate English text to Chinese (zh-CN)."""
+    """
+    Translates English text to Chinese (zh-CN) using Google Translate.
+    Returns tuple: (chinese_text, alignment_placeholder).
+    """
     text_en = text_en.strip()
     if not text_en:
         return "", ""
@@ -62,12 +69,14 @@ def google_translate(text_en):
         return text_en, ""
 
 def translate_text(english_text):
-    """Just wraps google_translate to return Chinese text only."""
+    """
+    Simple wrapper to get only the Chinese text.
+    """
     cn_text, _ = google_translate(english_text)
     return cn_text
 
 # ------------------ FONTS & WRAPPING ------------------
-FONT_PATH = "NotoSans-Regular.ttf"  # Make sure this is available in your app
+FONT_PATH = "NotoSans-Regular.ttf"  # Provide a valid path to your font
 MARGIN = 5
 MERGE_THRESHOLD = 20
 
@@ -76,10 +85,14 @@ def get_text_size(text, font):
         bbox = font.getbbox(text)
         return bbox[2] - bbox[0], bbox[3] - bbox[1]
     except AttributeError:
+        # Fallback for older Pillow versions
         return font.getmask(text).size
 
 def wrap_tokens(tokens, font, max_width):
-    """Wraps (word, color) tokens into lines within max_width."""
+    """
+    Wraps (word, color) tokens into lines within max_width.
+    Returns (lines, total_height).
+    """
     space_width, _ = get_text_size(" ", font)
     lines = []
     current_line = []
@@ -107,7 +120,9 @@ def wrap_tokens(tokens, font, max_width):
     return lines, total_height
 
 def draw_wrapped_lines(draw, lines, font, start_x, start_y, max_width):
-    """Draw lines of (word, color) tokens, centered horizontally in max_width."""
+    """
+    Draw lines of (word, color) tokens, centered horizontally in max_width.
+    """
     space_width, _ = get_text_size(" ", font)
     line_height = get_text_size("Ay", font)[1]
     for line in lines:
@@ -139,7 +154,7 @@ def repack_to_cbz(folder_path, output_cbz_path):
                 rel_path = os.path.relpath(full_path, folder_path)
                 zf.write(full_path, arcname=rel_path)
 
-# ------------------ VISION DETECTION ------------------
+# ------------------ VISION TEXT DETECTION ------------------
 def detect_text_boxes(image_path):
     with open(image_path, "rb") as img_file:
         content = img_file.read()
@@ -147,7 +162,7 @@ def detect_text_boxes(image_path):
     response = vision_client.text_detection(image=image)
     if not response.text_annotations:
         return []
-    # text_annotations[0] is the entire text, so skip that
+    # text_annotations[0] is entire text, skip that
     return response.text_annotations[1:]
 
 # ------------------ AWESOME-ALIGN MODEL ------------------
@@ -185,10 +200,10 @@ def awesome_align(english_text, chinese_text):
 
     sub2word_map_src = []
     for i, word_list in enumerate(token_src):
-        sub2word_map_src += [i]*len(word_list)
+        sub2word_map_src += [i] * len(word_list)
     sub2word_map_tgt = []
     for i, word_list in enumerate(token_tgt):
-        sub2word_map_tgt += [i]*len(word_list)
+        sub2word_map_tgt += [i] * len(word_list)
 
     model.eval()
     with torch.no_grad():
@@ -214,11 +229,10 @@ def awesome_align(english_text, chinese_text):
 # ------------------ TRANSLATION & SEGMENTS ------------------
 def translate_to_segments(english_text):
     """
-    1. If text is fully Korean, return None so we skip overlay.
-    2. Remove any mixed-Korean tokens.
-    3. Translate what's left to Chinese.
-    4. Get alignment via Awesome-Align.
-    5. Build color-coded tokens (English, Chinese, Pinyin).
+    1. If text is all Korean, return None => skip.
+    2. Strip out any tokens containing Korean.
+    3. Translate leftover to Chinese, run alignment.
+    4. Build color-coded token lists for English, Chinese, Pinyin.
     """
     if is_all_korean(english_text):
         return None, "", english_text
@@ -287,9 +301,11 @@ def bbox_for_annotation(ann):
     return min(xs), min(ys), max(xs), max(ys)
 
 def overlap_or_close(boxA, boxB, threshold=MERGE_THRESHOLD):
+    """
+    Merge logic uses a small threshold to see if they should combine as one text region.
+    """
     Aminx, Aminy, Amaxx, Amaxy = boxA
     Bminx, Bminy, Bmaxx, Bmaxy = boxB
-    # Basic bounding-box collision check with some threshold
     if Amaxx < Bminx - threshold or Bmaxx < Aminx - threshold:
         return False
     if Amaxy < Bminy - threshold or Bmaxy < Aminy - threshold:
@@ -307,6 +323,9 @@ def merge_boxes_and_text(boxA, boxB, textA, textB):
     return merged_box, merged_text
 
 def group_annotations(annotations):
+    """
+    Merges overlapping text boxes into single items with combined text.
+    """
     items = []
     for ann in annotations:
         items.append({"bbox": bbox_for_annotation(ann), "text": ann.description})
@@ -331,13 +350,84 @@ def group_annotations(annotations):
         items = new_items
     return items
 
+# ------------------ HELPER: BOX OVERLAP WITHOUT THRESHOLD ------------------
+def boxes_overlap(boxA, boxB):
+    """
+    Simple bounding-box overlap check with zero threshold.
+    """
+    Aminx, Aminy, Amaxx, Amaxy = boxA
+    Bminx, Bminy, Bmaxx, Bmaxy = boxB
+    if Amaxx < Bminx or Bmaxx < Aminx:
+        return False
+    if Amaxy < Bminy or Bmaxy < Aminy:
+        return False
+    return True
+
+# ------------------ HELPER: TRY EXPANDING A BOX ------------------
+def try_expand_box(orig_box, other_boxes, img_width, img_height,
+                   expand_w_factor=0.2, expand_h_factor=0.25,
+                   margin=5, extra_padding=10):
+    """
+    Attempt to expand `orig_box` by 20% in width, 25% in height, 
+    plus existing margin/padding. If expansion causes overlap 
+    with any box in `other_boxes`, revert to original.
+
+    Returns the final (min_x, min_y, max_x, max_y).
+    """
+    (min_x, min_y, max_x, max_y) = orig_box
+
+    # Original expansions (margin + padding)
+    min_x = max(0, min_x - margin - extra_padding)
+    min_y = max(0, min_y - margin - extra_padding)
+    max_x = min(img_width, max_x + margin + extra_padding)
+    max_y = min(img_height, max_y + margin + extra_padding)
+
+    orig_expanded = (min_x, min_y, max_x, max_y)
+
+    # Now compute the 20% width & 25% height expansions around the *center*
+    width = max_x - min_x
+    height = max_y - min_y
+    expand_w = width * expand_w_factor
+    expand_h = height * expand_h_factor
+
+    # We'll expand half of that on each side
+    new_min_x = min_x - expand_w / 2
+    new_max_x = max_x + expand_w / 2
+    new_min_y = min_y - expand_h / 2
+    new_max_y = max_y + expand_h / 2
+
+    # Clamp to image boundaries
+    new_min_x = max(0, new_min_x)
+    new_min_y = max(0, new_min_y)
+    new_max_x = min(img_width, new_max_x)
+    new_max_y = min(img_height, new_max_y)
+
+    expanded_box = (new_min_x, new_min_y, new_max_x, new_max_y)
+
+    # Check overlap with others (excluding the original box itself).
+    for other in other_boxes:
+        if other is None:
+            continue
+        if other["final_bbox"] is None:
+            continue
+        # If final_bbox is the *same* item, skip
+        if other["final_bbox"] == orig_box:
+            continue
+        # If overlap found => revert
+        if boxes_overlap(expanded_box, other["final_bbox"]):
+            return orig_expanded
+
+    # If no overlap, accept the bigger box
+    return expanded_box
+
 # ------------------ OVERLAY ------------------
 def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN):
     """
-    For each annotation box:
-      - If text is purely Korean, skip overlay.
-      - Otherwise, compute translation & alignment
-        and overlay Pinyin on top, a separator, then the English.
+    For each annotation box, we do:
+      1) Attempt to expand the bounding box by 20% width, 25% height 
+         (unless it overlaps).
+      2) If text is all Korean, skip overlay.
+      3) Otherwise, translate & overlay pinyin on top, separator, then English.
     """
     EXTRA_PADDING = 10
     SEPARATOR_PADDING = 10
@@ -348,24 +438,38 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
     draw = ImageDraw.Draw(img)
     text_triplets = []
 
+    # === First pass: expand each bounding box if possible ===
     for item in items:
-        min_x, min_y, max_x, max_y = item["bbox"]
+        item["final_bbox"] = None  # Will store final expanded bounding box
+
+    for i, item in enumerate(items):
+        orig_box = item["bbox"]
+        # Attempt expansion, but we must check overlap with other boxes that have final_bbox
+        expanded_box = try_expand_box(
+            orig_box,
+            other_boxes=[it for it in items if it is not item],
+            img_width=img.width,
+            img_height=img.height,
+            expand_w_factor=0.2,
+            expand_h_factor=0.25,
+            margin=margin,
+            extra_padding=EXTRA_PADDING
+        )
+        item["final_bbox"] = expanded_box
+
+    # === Second pass: do the actual overlay with the final bounding box. ===
+    for item in items:
+        (min_x, min_y, max_x, max_y) = item["final_bbox"]
         original_text = item["text"].strip()
 
         seg_result, mapping_str, translated_text = translate_to_segments(original_text)
         if seg_result is None:
-            # It's all-Korean text or empty after filtering => skip
-            continue
-        (seg_eng, seg_mand, seg_pin) = seg_result
+            continue  # all-Korean or empty after filtering
+
+        seg_eng, seg_mand, seg_pin = seg_result
         text_triplets.append((original_text, (seg_eng, seg_mand, seg_pin), mapping_str, translated_text))
 
-        # Expand the bounding box a bit
-        min_x = max(0, min_x - margin - EXTRA_PADDING)
-        min_y = max(0, min_y - margin - EXTRA_PADDING)
-        max_x = min(img.width, max_x + margin + EXTRA_PADDING)
-        max_y = min(img.height, max_y + margin + EXTRA_PADDING)
-
-        # White rectangle + red border
+        # Draw a white rectangle + red outline
         draw.rectangle([(min_x, min_y), (max_x, max_y)], fill=(255,255,255,255))
         draw.rectangle([(min_x, min_y), (max_x, max_y)], outline=(255,0,0,255), width=2)
 
@@ -403,9 +507,8 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 
 # ------------------ STREAMLIT APP ------------------
 def main():
-    st.title("Batch CBZ Translator")
+    st.title("Batch CBZ Translator with Box Expansion")
 
-    # 1) Create a unique session-based folder so each user or refresh is isolated:
     if "session_id" not in st.session_state:
         st.session_state["session_id"] = str(uuid.uuid4())
 
@@ -413,13 +516,12 @@ def main():
     base_temp_folder = f"temp_processing_{session_id}"
     output_folder = f"processed_cbz_output_{session_id}"
 
-    # Make sure they're empty each session:
     if not os.path.exists(base_temp_folder):
         os.makedirs(base_temp_folder)
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
 
-    st.write("Upload multiple CBZ files (these are only kept for **your** session).")
+    st.write("Upload multiple CBZ files (only for your session).")
     uploaded_files = st.file_uploader("Upload CBZ Files", type=["cbz"], accept_multiple_files=True)
 
     if uploaded_files:
@@ -443,9 +545,11 @@ def main():
                 annotations = detect_text_boxes(img_path)
                 if annotations:
                     merged_items = group_annotations(annotations)
-                    final_img, _ = overlay_merged_pinyin(img_path, merged_items,
-                                                         font_path=FONT_PATH,
-                                                         margin=MARGIN)
+                    final_img, _ = overlay_merged_pinyin(
+                        img_path, merged_items,
+                        font_path=FONT_PATH,
+                        margin=MARGIN
+                    )
                     final_img.save(img_path)
 
             # Repack to CBZ
@@ -453,13 +557,13 @@ def main():
             repack_to_cbz(temp_extract_folder, output_cbz_path)
             processed_cbz_paths.append(output_cbz_path)
 
-            # Clean up extracted images
+            # Cleanup
             shutil.rmtree(temp_extract_folder)
             progress_bar.progress(idx / total_files)
 
         st.success("Processing complete!")
 
-        # Put them all in a single ZIP for download
+        # ZIP all processed CBZ
         final_zip = io.BytesIO()
         with zipfile.ZipFile(final_zip, "w") as zf:
             for file in sorted(os.listdir(output_folder)):
@@ -475,8 +579,7 @@ def main():
             mime="application/zip"
         )
 
-    # OPTIONAL: Cleanup after the session ends (button or otherwise)
-    # If you want to explicitly clear everything upon a button click:
+    # Optional button to reset
     if st.button("Clear My Session Files"):
         shutil.rmtree(base_temp_folder, ignore_errors=True)
         shutil.rmtree(output_folder, ignore_errors=True)
