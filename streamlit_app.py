@@ -423,12 +423,12 @@ def boxes_overlap(boxA, boxB):
 
 # ------------------ HELPER: TRY EXPANDING A BOX ------------------
 def try_expand_box(orig_box, other_boxes, img_width, img_height,
-                   expand_w_factor=0.2, expand_h_factor=0.25,
+                   expand_w_factor=0.2, expand_h_factor=0.35,  # <-- CHANGED HERE
                    margin=5, extra_padding=10):
     """
-    Attempt to expand `orig_box` by 20% in width, 25% in height, 
-    plus existing margin/padding. If expansion causes overlap 
-    with any box in `other_boxes`, revert to original.
+    Attempt to expand `orig_box` by 20% in width, *35%* in height
+    (was 25% originally), plus existing margin/padding.
+    If expansion causes overlap with any box in `other_boxes`, revert to original.
 
     Returns the final (min_x, min_y, max_x, max_y).
     """
@@ -442,7 +442,7 @@ def try_expand_box(orig_box, other_boxes, img_width, img_height,
 
     orig_expanded = (min_x, min_y, max_x, max_y)
 
-    # Now compute the 20% width & 25% height expansions around the *center*
+    # Now compute the expand_w_factor & expand_h_factor expansions around the center
     width = max_x - min_x
     height = max_y - min_y
     expand_w = width * expand_w_factor
@@ -467,21 +467,18 @@ def try_expand_box(orig_box, other_boxes, img_width, img_height,
             continue
         if other["final_bbox"] is None:
             continue
-        # If final_bbox is the *same* item, skip
         if other["final_bbox"] == orig_box:
             continue
-        # If overlap found => revert
         if boxes_overlap(expanded_box, other["final_bbox"]):
             return orig_expanded
 
-    # If no overlap, accept the bigger box
     return expanded_box
 
 # ------------------ OVERLAY ------------------
 def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN):
     """
     For each annotation box, we do:
-      1) Attempt to expand the bounding box by 20% width, 25% height 
+      1) Attempt to expand the bounding box by 20% width, 35% height 
          (unless it overlaps).
       2) If text is all Korean, skip overlay.
       3) Otherwise, translate & overlay pinyin on top, separator, then English.
@@ -497,7 +494,7 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 
     # === First pass: expand each bounding box if possible ===
     for item in items:
-        item["final_bbox"] = None  # Will store final expanded bounding box
+        item["final_bbox"] = None
 
     for i, item in enumerate(items):
         orig_box = item["bbox"]
@@ -507,7 +504,7 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
             img_width=img.width,
             img_height=img.height,
             expand_w_factor=0.2,
-            expand_h_factor=0.25,
+            expand_h_factor=0.35,  # vertical expansion increased
             margin=margin,
             extra_padding=EXTRA_PADDING
         )
@@ -518,11 +515,9 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
         (min_x, min_y, max_x, max_y) = item["final_bbox"]
         original_text = item["text"].strip()
 
-        # We now use the multi-sentence version
         seg_result, mapping_str, translated_text = translate_to_segments(original_text)
         if seg_result is None:
-            # all-Korean or filtered out => skip overlay
-            continue
+            continue  # all-Korean or empty after filtering
 
         seg_eng, seg_mand, seg_pin = seg_result
         text_triplets.append((original_text, (seg_eng, seg_mand, seg_pin), mapping_str, translated_text))
@@ -566,6 +561,9 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 # ------------------ STREAMLIT APP ------------------
 def main():
     st.title("Batch CBZ Translator with Box Expansion")
+
+    # Create a placeholder at the top for a download button (we'll fill it later)
+    download_placeholder = st.empty()
 
     if "session_id" not in st.session_state:
         st.session_state["session_id"] = str(uuid.uuid4())
@@ -621,7 +619,7 @@ def main():
 
         st.success("Processing complete!")
 
-        # ZIP all processed CBZ
+        # Create a ZIP of all processed CBZ
         final_zip = io.BytesIO()
         with zipfile.ZipFile(final_zip, "w") as zf:
             for file in sorted(os.listdir(output_folder)):
@@ -630,7 +628,9 @@ def main():
                     zf.write(full_path, arcname=file)
 
         final_zip.seek(0)
-        st.download_button(
+
+        # Place the download button in our placeholder *at the top*
+        download_placeholder.download_button(
             label="Download Processed CBZ Files (ZIP)",
             data=final_zip,
             file_name="processed_cbz_files.zip",
