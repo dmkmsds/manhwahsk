@@ -44,6 +44,22 @@ def filter_korean(text):
     filtered_tokens = [tok for tok in tokens if not re.search(r'[\uac00-\ud7a3]', tok)]
     return " ".join(filtered_tokens)
 
+def split_into_sentences(text):
+    """
+    Naive approach to split text into sentences based on '.', '?', and '!' delimiters.
+    Preserves the delimiter at the end of each sentence.
+    """
+    parts = re.split(r'([.?!])', text)
+    sentences = []
+    for i in range(0, len(parts), 2):
+        raw_sent = parts[i].strip()
+        if i + 1 < len(parts):
+            raw_sent += parts[i+1]  # attach punctuation
+        raw_sent = raw_sent.strip()
+        if raw_sent:
+            sentences.append(raw_sent)
+    return sentences
+
 # ------------------ GOOGLE CLIENTS ------------------
 translation_client = translate.Client()
 vision_client = vision.ImageAnnotatorClient()
@@ -226,72 +242,114 @@ def awesome_align(english_text, chinese_text):
     }
     return str(aggregated_alignments)
 
-# ------------------ TRANSLATION & SEGMENTS ------------------
+# ------------------ MULTI-SENTENCE TRANSLATION & SEGMENTS ------------------
 def translate_to_segments(english_text):
     """
-    1. If text is all Korean, return None => skip.
-    2. Strip out any tokens containing Korean.
-    3. Translate leftover to Chinese, run alignment.
-    4. Build color-coded token lists for English, Chinese, Pinyin.
+    1) Split 'english_text' into multiple sentences.
+    2) For each sentence:
+       - If it's all Korean, skip.
+       - Filter out tokens with Korean, translate leftover, run Awesome-Align.
+       - Color-code aligned tokens (English, Chinese, pinyin).
+    3) Concatenate the sentence-level tokens into a single set.
+       Return (segmented_eng, segmented_mand, segmented_pin), combined alignment placeholder, combined Chinese text.
     """
-    if is_all_korean(english_text):
-        return None, "", english_text
 
-    filtered_text = filter_korean(english_text)
-    if not filtered_text.strip():
-        return None, "", english_text
+    # Break up into naive sentences
+    sentence_list = split_into_sentences(english_text)
 
-    cn_text = translate_text(filtered_text)
-    mapping_str = awesome_align(filtered_text, cn_text)
-    st.write("Awesome-Align mapping:", mapping_str)
-
-    sent_src = filtered_text.strip().split()
-    sent_tgt = list(jieba.cut(cn_text))
-
-    # Parse alignment
-    mapping_pairs = []
-    try:
-        mapping_set = eval(mapping_str)
-        for tup in mapping_set:
-            if len(tup) == 3:
-                mapping_pairs.append(tup)
-    except Exception as e:
-        st.write("Error parsing mapping_str:", e)
-
-    mapping_dict = {}
-    reverse_mapping = {}
-    for i, j, _ in mapping_pairs:
-        mapping_dict.setdefault(i, set()).add(j)
-        reverse_mapping.setdefault(j, set()).add(i)
+    # We'll accumulate tokens for all sentences
+    all_seg_eng = []
+    all_seg_mand = []
+    all_seg_pin = []
 
     normal_palette = [
         "blue", "green", "orange", "purple", "brown",
         "cyan", "magenta", "olive", "teal", "navy"
     ]
+    color_idx = 0  # which color in the palette to use next
 
-    color_mapping = {}
-    for i, word in enumerate(sent_src):
-        if i in mapping_dict and normal_palette:
-            color_mapping[i] = normal_palette.pop(0)
-        else:
-            color_mapping[i] = "black"
+    for sent in sentence_list:
+        # If it's purely Korean, skip alignment
+        if is_all_korean(sent):
+            continue
 
-    target_color_mapping = {}
-    for j, word in enumerate(sent_tgt):
-        if j in reverse_mapping:
-            source_index = list(reverse_mapping[j])[0]
-            target_color_mapping[j] = color_mapping.get(source_index, "black")
-        else:
-            target_color_mapping[j] = "black"
+        # Filter out tokens that contain ANY Korean
+        filtered_text = filter_korean(sent)
+        if not filtered_text.strip():
+            continue
 
-    segmented_eng = [(word, color_mapping.get(i, "black")) for i, word in enumerate(sent_src)]
-    segmented_mand = [(word, target_color_mapping.get(j, "black")) for j, word in enumerate(sent_tgt)]
-    segmented_pin = [
-        (" ".join(lazy_pinyin(word, style=Style.TONE)), target_color_mapping.get(j, "black"))
-        for j, word in enumerate(sent_tgt)
-    ]
+        # Translate leftover text to Chinese
+        cn_text = translate_text(filtered_text)
 
-    return (segmented_eng, segmented_mand, segmented_pin), mapping_str, cn_text
+        # Run Awesome-Align
+        mapping_str = awesome_align(filtered_text, cn_text)
+        st.write("Awesome-Align mapping (per sentence):", mapping_str)
+
+        # Parse the alignment string
+        try:
+            mapping_set = eval(mapping_str)
+            mapping_pairs = [tup for tup in mapping_set if len(tup) == 3]
+        except Exception as e:
+            st.write("Error parsing mapping_str:", e)
+            mapping_pairs = []
+
+        mapping_dict = {}
+        reverse_mapping = {}
+        for i, j, _ in mapping_pairs:
+            mapping_dict.setdefault(i, set()).add(j)
+            reverse_mapping.setdefault(j, set()).add(i)
+
+        # Tokenize English and Chinese
+        sent_src = filtered_text.strip().split()
+        sent_tgt = list(jieba.cut(cn_text))
+
+        # Assign colors within this sentence
+        color_mapping = {}
+        for i, word in enumerate(sent_src):
+            if i in mapping_dict and color_idx < len(normal_palette):
+                color_mapping[i] = normal_palette[color_idx]
+                color_idx = (color_idx + 1) % len(normal_palette)
+            else:
+                color_mapping[i] = "black"
+
+        target_color_mapping = {}
+        for j, word in enumerate(sent_tgt):
+            if j in reverse_mapping:
+                # pick any aligned source index
+                source_index = list(reverse_mapping[j])[0]
+                target_color_mapping[j] = color_mapping.get(source_index, "black")
+            else:
+                target_color_mapping[j] = "black"
+
+        seg_eng = [(word, color_mapping.get(i, "black")) for i, word in enumerate(sent_src)]
+        seg_mand = [(word, target_color_mapping.get(j, "black")) for j, word in enumerate(sent_tgt)]
+        seg_pin = [
+            (" ".join(lazy_pinyin(word, style=Style.TONE)), target_color_mapping.get(j, "black"))
+            for j, word in enumerate(sent_tgt)
+        ]
+
+        # Add space tokens between sentence chunks (optional)
+        if all_seg_eng:
+            all_seg_eng.append((" ", "black"))
+            all_seg_mand.append((" ", "black"))
+            all_seg_pin.append((" ", "black"))
+
+        # Append tokens for this sentence
+        all_seg_eng.extend(seg_eng)
+        all_seg_mand.extend(seg_mand)
+        all_seg_pin.extend(seg_pin)
+
+    # If we never got any tokens, it means the entire text was Korean or filtered out
+    if not all_seg_eng:
+        return None, "", english_text
+
+    # Combine final Chinese text for display (just concatenates the Chinese tokens)
+    combined_chinese = " ".join([tok[0] for tok in all_seg_mand])
+    # We won't store a real alignment string for the entire multi-sentence text, 
+    # but we can put a placeholder
+    mapping_str = "<multi-sentence alignment>"
+
+    return (all_seg_eng, all_seg_mand, all_seg_pin), mapping_str, combined_chinese
 
 # ------------------ MERGING LOGIC ------------------
 def bbox_for_annotation(ann):
@@ -390,7 +448,6 @@ def try_expand_box(orig_box, other_boxes, img_width, img_height,
     expand_w = width * expand_w_factor
     expand_h = height * expand_h_factor
 
-    # We'll expand half of that on each side
     new_min_x = min_x - expand_w / 2
     new_max_x = max_x + expand_w / 2
     new_min_y = min_y - expand_h / 2
@@ -444,7 +501,6 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 
     for i, item in enumerate(items):
         orig_box = item["bbox"]
-        # Attempt expansion, but we must check overlap with other boxes that have final_bbox
         expanded_box = try_expand_box(
             orig_box,
             other_boxes=[it for it in items if it is not item],
@@ -462,9 +518,11 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
         (min_x, min_y, max_x, max_y) = item["final_bbox"]
         original_text = item["text"].strip()
 
+        # We now use the multi-sentence version
         seg_result, mapping_str, translated_text = translate_to_segments(original_text)
         if seg_result is None:
-            continue  # all-Korean or empty after filtering
+            # all-Korean or filtered out => skip overlay
+            continue
 
         seg_eng, seg_mand, seg_pin = seg_result
         text_triplets.append((original_text, (seg_eng, seg_mand, seg_pin), mapping_str, translated_text))
