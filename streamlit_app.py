@@ -294,7 +294,7 @@ def translate_to_segments(english_text):
             mapping_pairs = []
 
         # Build a bipartite graph using a threshold of 0.6
-        threshold = 0.6
+        threshold = 0.55
         graph = {}
         for i, j, prob in mapping_pairs:
             if prob >= threshold:
