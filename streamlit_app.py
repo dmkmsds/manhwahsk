@@ -118,6 +118,7 @@ def wrap_tokens(tokens, font, max_width):
     for token_text, token_color in tokens:
         token_width, _ = get_text_size(token_text, font)
         if current_line:
+            # If adding another token + space would exceed the max_width, start new line
             if current_width + space_width + token_width > max_width:
                 lines.append(current_line)
                 current_line = [(token_text, token_color)]
@@ -189,7 +190,7 @@ def load_awesome_align_model():
     tokenizer = AutoTokenizer.from_pretrained("aneuraz/awesome-align-with-co")
     return model, tokenizer
 
-def awesome_align_connected(english_text, chinese_text, threshold=0.6, align_layer=8):
+def awesome_align_connected(english_text, chinese_text, threshold=0.7, align_layer=8):
     """
     Use Awesome-Align to build a bipartite graph (word-level) above a threshold,
     then find connected components. Each connected component gets a unique color.
@@ -353,8 +354,10 @@ def translate_to_segments(english_text):
         # Build color-coded tokens
         seg_eng = [(word, color_map_eng[i]) for i, word in enumerate(sent_src)]
         seg_mand = [(word, color_map_cn[j]) for j, word in enumerate(sent_tgt)]
-        seg_pin = [(" ".join(lazy_pinyin(word, style=Style.TONE)), color_map_cn[j]) 
-                   for j, word in enumerate(sent_tgt)]
+        seg_pin = [
+            (" ".join(lazy_pinyin(word, style=Style.TONE)), color_map_cn[j])
+            for j, word in enumerate(sent_tgt)
+        ]
 
         # Optional: add spacing between sentence segments (in black) if not empty
         if all_seg_eng:
@@ -466,7 +469,7 @@ def try_expand_box(orig_box, other_boxes, img_width, img_height,
 
     expanded_box = (new_min_x, new_min_y, new_max_x, new_max_y)
 
-    # Check overlap
+    # Check overlap with other final bboxes
     for other in other_boxes:
         if other is None:
             continue
@@ -486,6 +489,7 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
       1) Expand the box if possible
       2) If text is all Korean => skip
       3) Otherwise => translate & color-code using connected components
+      Returns the final image + text_triplets for reference
     """
     EXTRA_PADDING = 10
     SEPARATOR_PADDING = 10
@@ -606,12 +610,29 @@ def main():
                 annotations = detect_text_boxes(img_path)
                 if annotations:
                     merged_items = group_annotations(annotations)
-                    final_img, _ = overlay_merged_pinyin(
+                    final_img, text_triplets = overlay_merged_pinyin(
                         img_path, merged_items,
                         font_path=FONT_PATH,
                         margin=MARGIN
                     )
+                    
+                    # Save the new image back to the same path
                     final_img.save(img_path)
+
+                    # -- Display in Streamlit (so you can see without downloading) --
+                    st.subheader(f"Processed Image: {os.path.basename(img_path)}")
+                    st.image(final_img, caption=os.path.basename(img_path), use_column_width=True)
+
+                    # Show the alignment info:
+                    for (orig_text, (seg_eng, seg_mand, seg_pin), align_str, cn_text) in text_triplets:
+                        st.markdown(f"**Original Text:** {orig_text}")
+                        st.markdown(f"**Chinese Translation:** {cn_text}")
+                        st.markdown(f"**Alignment Info (placeholder):** {align_str}")
+                        # If you want to show the color-coded tokens, you can also print seg_eng, seg_mand, etc.
+                        # st.write("seg_eng:", seg_eng)
+                        # st.write("seg_mand:", seg_mand)
+                        # st.write("seg_pin:", seg_pin)
+                        st.write("---")
 
             # Repack to CBZ
             output_cbz_path = os.path.join(output_folder, cbz_filename)
