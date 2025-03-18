@@ -46,7 +46,7 @@ def filter_korean(text):
 
 def tokenize_with_punctuation(text):
     """
-    Splits the text so punctuation is its own token: e.g. "WILL?" => ["WILL", "?"].
+    Splits text so punctuation is its own token, e.g. "WILL?" => ["WILL", "?"].
     """
     text = re.sub(r'([^\w\s])', r' \1 ', text)
     text = re.sub(r'\s+', ' ', text)
@@ -68,11 +68,11 @@ def split_into_sentences(text):
             sentences.append(raw_sent)
     return sentences
 
-# NEW! Removes all punctuation so we can do "clean" alignment
 def remove_punct_for_alignment(text):
     """
-    Remove all non-alphanumeric and non-whitespace characters.
-    E.g. "WASN'T" => "WASNT", "BRINGING OUT THE WILL?" => "BRINGING OUT THE WILL"
+    Remove all punctuation so alignment does not try to match it.
+    E.g. "WASN'T" => "WASNT"
+    "BRINGING OUT THE WILL?" => "BRINGING OUT THE WILL"
     """
     return re.sub(r'[^\w\s]', '', text)
 
@@ -82,7 +82,7 @@ vision_client = vision.ImageAnnotatorClient()
 
 def google_translate(text_en):
     """
-    Translates English text to Chinese (zh-CN) using Google Translate.
+    Translates English text to Chinese (zh-CN).
     Returns tuple: (chinese_text, alignment_placeholder).
     """
     text_en = text_en.strip()
@@ -94,16 +94,13 @@ def google_translate(text_en):
             target_language='zh-CN',
             source_language='en'
         )
-        cn_text = result['translatedText']
-        return cn_text, ""
+        return result['translatedText'], ""
     except Exception as e:
         st.write(f"Google translation error: {e}")
         return text_en, ""
 
 def translate_text(english_text):
-    """
-    Simple wrapper to get only the Chinese text.
-    """
+    """Just returns the Chinese text from google_translate."""
     cn_text, _ = google_translate(english_text)
     return cn_text
 
@@ -122,7 +119,7 @@ def get_text_size(text, font):
 
 def wrap_tokens(tokens, font, max_width):
     """
-    Wraps (word, color) tokens into lines within max_width.
+    Wraps (word, color) tokens into lines within `max_width`.
     Returns (lines, total_height).
     """
     space_width, _ = get_text_size(" ", font)
@@ -153,7 +150,8 @@ def wrap_tokens(tokens, font, max_width):
 
 def draw_wrapped_lines(draw, lines, font, start_x, start_y, max_width):
     """
-    Draw lines of (word, color) tokens, centered horizontally in max_width.
+    Draw lines of (word, color) tokens, centered horizontally in `max_width`.
+    Returns the new y-coordinate after the last line.
     """
     space_width, _ = get_text_size(" ", font)
     line_height = get_text_size("Ay", font)[1]
@@ -194,7 +192,7 @@ def detect_text_boxes(image_path):
     response = vision_client.text_detection(image=image)
     if not response.text_annotations:
         return []
-    # text_annotations[0] is the entire recognized text, skip that
+    # text_annotations[0] = entire recognized text, skip that
     return response.text_annotations[1:]
 
 # ------------------ AWESOME-ALIGN MODEL ------------------
@@ -206,25 +204,33 @@ def load_awesome_align_model():
 
 def awesome_align(english_text, chinese_text):
     """
-    Do alignment with punctuation removed, or any text the caller passes in.
-    Returns a string representation + a list of (src_idx, tgt_idx, prob).
+    Aligns `english_text` vs `chinese_text` (both punctuation-stripped).
+    Returns:
+      - alignment_str (string)
+      - aggregated_alignments: list of (src_i, tgt_i, prob)
+      - alignment_display: list of (en_token, cn_token, prob) for direct display
     """
     st.write("**DEBUG**: Inside awesome_align =>")
-    st.write("english_text (no punctuation):", english_text)
-    st.write("chinese_text (no punctuation):", chinese_text)
+    st.write("english_text (clean):", english_text)
+    st.write("chinese_text (clean):", chinese_text)
 
     align_layer = 8
     th = 1e-3
 
+    # Split into tokens
     sent_src = english_text.strip().split()
     sent_tgt = chinese_text.strip().split()
 
+    # Load model
     model, tokenizer = load_awesome_align_model()
+
+    # Subword tokenize
     token_src = [tokenizer.tokenize(word) for word in sent_src]
     token_tgt = [tokenizer.tokenize(word) for word in sent_tgt]
     wid_src = [tokenizer.convert_tokens_to_ids(x) for x in token_src]
     wid_tgt = [tokenizer.convert_tokens_to_ids(x) for x in token_tgt]
 
+    # Prepare for model
     ids_src = tokenizer.prepare_for_model(
         list(itertools.chain(*wid_src)),
         return_tensors='pt',
@@ -238,7 +244,7 @@ def awesome_align(english_text, chinese_text):
         truncation=True
     )['input_ids']
 
-    # Build sub2word maps for source and target
+    # Build sub2word maps
     sub2word_map_src = []
     for i, word_list in enumerate(token_src):
         sub2word_map_src += [i] * len(word_list)
@@ -246,6 +252,7 @@ def awesome_align(english_text, chinese_text):
     for i, word_list in enumerate(token_tgt):
         sub2word_map_tgt += [i] * len(word_list)
 
+    # Forward pass
     model.eval()
     with torch.no_grad():
         out_src = model(ids_src.unsqueeze(0), output_hidden_states=True)[2][align_layer][0, 1:-1]
@@ -255,6 +262,7 @@ def awesome_align(english_text, chinese_text):
         softmax_tgtsrc = torch.nn.Softmax(dim=-2)(dot_prod)
         softmax_inter = (softmax_srctgt > th) * (softmax_tgtsrc > th)
 
+    # Gather alignments
     align_subwords = torch.nonzero(softmax_inter, as_tuple=False)
     align_dict = {}
     for i_idx, j_idx in align_subwords:
@@ -268,75 +276,72 @@ def awesome_align(english_text, chinese_text):
         avg_prob = sum(v)/len(v)
         aggregated_alignments.append((k[0], k[1], avg_prob))
 
-    # Convert to a set for the string representation
+    # Build a user-friendly string set
     alignment_str_set = {(a[0], a[1], a[2]) for a in aggregated_alignments}
-    return str(alignment_str_set), aggregated_alignments
+
+    # NEW: Build a display version with the actual tokens
+    alignment_display = []
+    for (src_i, tgt_i, prob) in aggregated_alignments:
+        if src_i < len(sent_src) and tgt_i < len(sent_tgt):
+            en_tok = sent_src[src_i]
+            cn_tok = sent_tgt[tgt_i]
+            alignment_display.append((en_tok, cn_tok, prob))
+
+    return str(alignment_str_set), aggregated_alignments, alignment_display
 
 # ------------------ MULTI-SENTENCE TRANSLATION & SEGMENTS ------------------
 def translate_to_segments(english_text):
     """
-    For each sentence in 'english_text':
-      1) Filter out Korean.
-      2) Translate to Chinese.
-      3) Strip punctuation from both sides => do alignment on the "clean" strings.
-      4) For final color overlay, we re-tokenize the original text (with punctuation).
-         We'll color punctuation tokens black, and color words according to alignment.
+    1) Split into sentences
+    2) For each sentence, remove Korean, translate to CN
+    3) Remove punctuation from both sides => alignment
+    4) For color overlay, re-tokenize original with punctuation => color words
+    5) Return final tokens + alignment
     """
     sentence_list = split_into_sentences(english_text)
-
     all_seg_eng = []
     all_seg_mand = []
     all_seg_pin = []
 
-    # Basic color palette
     normal_palette = [
         "blue", "green", "orange", "purple", "brown",
         "cyan", "magenta", "olive", "teal", "navy"
     ]
     color_idx = 0
 
-    # We'll accumulate alignment info across all sentences
+    # We'll store the aggregated align_list + also the "display" (actual token pairs)
     all_alignment_info = []
+    all_alignment_display = []  # store real token mappings
 
     for sent in sentence_list:
-        # 1) skip if the sentence is purely Korean
         if is_all_korean(sent):
             continue
-
-        # 2) remove any token containing Korean
         filtered_text = filter_korean(sent)
         if not filtered_text.strip():
             continue
 
-        # 3) translate leftover English to Chinese
         cn_text = translate_text(filtered_text)
 
-        # --- Punctuation REMOVAL for alignment only ---
+        # For alignment: strip punctuation
         clean_en = remove_punct_for_alignment(filtered_text)
         clean_cn = remove_punct_for_alignment(cn_text)
 
-        # DEBUG:
         st.write("**DEBUG**: Will call awesome_align with (punct removed):")
         st.write("English (clean_en):", clean_en)
         st.write("Chinese (clean_cn):", clean_cn)
 
-        # 4) Do alignment on the cleaned strings
-        mapping_str, align_list = awesome_align(clean_en, clean_cn)
+        # Get both the numeric alignment + token display
+        alignment_str, align_list, align_display = awesome_align(clean_en, clean_cn)
         all_alignment_info.extend(align_list)
+        all_alignment_display.extend(align_display)
 
-        # Now, for color-coded display, we re-tokenize the **original** text
-        # (with punctuation) so punctuation is separate tokens:
+        # Now color-code the original text
         sent_src_tokens = tokenize_with_punctuation(filtered_text)
         sent_tgt_tokens = list(jieba.cut(cn_text))
 
-        # We'll build a "clean" version of those tokens by skipping punctuation
-        # to figure out which "word index" each token corresponds to.
-        # E.g. "Hello," => "Hello" is the clean word index, "," is punctuation => skip
         def is_punct(token):
             return bool(re.match(r'^[^\w\s]+$', token))
 
-        # Build an index map: each real word gets a "clean index" increment
-        # punctuation tokens map to -1
         src_idx_map = []
         src_word_counter = 0
         for tok in sent_src_tokens:
@@ -346,7 +351,6 @@ def translate_to_segments(english_text):
                 src_idx_map.append(src_word_counter)
                 src_word_counter += 1
 
-        # same for Chinese side
         tgt_idx_map = []
         tgt_word_counter = 0
         for tok in sent_tgt_tokens:
@@ -356,19 +360,14 @@ def translate_to_segments(english_text):
                 tgt_idx_map.append(tgt_word_counter)
                 tgt_word_counter += 1
 
-        # We'll figure out which "clean" indices in alignment exist
-        # then color them if they're aligned, else black
-        # We'll build seg_eng & seg_mand by scanning each token
         seg_eng = []
         seg_mand = []
 
         for i, tok in enumerate(sent_src_tokens):
             if src_idx_map[i] == -1:
-                # punctuation => black
                 seg_eng.append((tok, "black"))
             else:
                 if src_idx_map[i] in [x[0] for x in align_list]:
-                    # If aligned, pick from palette
                     seg_eng.append((tok, normal_palette[color_idx]))
                     color_idx = (color_idx + 1) % len(normal_palette)
                 else:
@@ -376,36 +375,24 @@ def translate_to_segments(english_text):
 
         for j, tok in enumerate(sent_tgt_tokens):
             if tgt_idx_map[j] == -1:
-                # punctuation => black
                 seg_mand.append((tok, "black"))
             else:
-                # see if it's aligned to any source index
-                # find the pair in align_list: (src, tgt, prob)
-                # that matches tgt_idx_map[j]
-                # We just pick the first matched src to get a color
                 found_pair = None
                 for (s_i, t_j, _) in align_list:
                     if t_j == tgt_idx_map[j]:
-                        found_pair = s_i
+                        found_pair = True
                         break
-                if found_pair is not None:
-                    # find color used by that source index
-                    # but we haven't stored that color separately
-                    # simplest approach: just reuse the same palette step
+                if found_pair:
                     seg_mand.append((tok, normal_palette[color_idx]))
                     color_idx = (color_idx + 1) % len(normal_palette)
                 else:
                     seg_mand.append((tok, "black"))
 
-        # Now pinyin side: replicate the same color as seg_mand
         seg_pin = []
-        for pair, _ in zip(seg_mand, sent_tgt_tokens):
-            # pair is (word, color)
-            word, color = pair
+        for (word, color) in seg_mand:
             pin = " ".join(lazy_pinyin(word, style=Style.TONE))
             seg_pin.append((pin, color))
 
-        # If we already have tokens from previous sentences, add space
         if all_seg_eng:
             all_seg_eng.append((" ", "black"))
             all_seg_mand.append((" ", "black"))
@@ -415,15 +402,24 @@ def translate_to_segments(english_text):
         all_seg_mand.extend(seg_mand)
         all_seg_pin.extend(seg_pin)
 
-    # If no tokens at all, means everything was Korean or empty
     if not all_seg_eng:
         return None, "", english_text, []
 
     combined_chinese = " ".join([tok[0] for tok in all_seg_mand])
     mapping_str = "<multi-sentence alignment>"
-    return (all_seg_eng, all_seg_mand, all_seg_pin), mapping_str, combined_chinese, all_alignment_info
 
-# ------------------ MERGING LOGIC ------------------
+    # We'll store the "display" version of alignment in a combined list of tuples
+    # (en_tok, cn_tok, prob). The caller can decide how to show it.
+    # We'll just attach it to the last return item.
+    # We'll wrap it in a single list so that the caller receives it as "alignment_info".
+    combined_alignment_info = {
+        "raw_alignments": all_alignment_info,
+        "token_alignments": all_alignment_display
+    }
+
+    return (all_seg_eng, all_seg_mand, all_seg_pin), mapping_str, combined_chinese, combined_alignment_info
+
+# ------------------ MERGING / BOX & IMAGE OPS ------------------
 def bbox_for_annotation(ann):
     vs = ann.bounding_poly.vertices
     xs = [v.x for v in vs]
@@ -477,7 +473,6 @@ def group_annotations(annotations):
         items = new_items
     return items
 
-# ------------------ BOX OVERLAP ------------------
 def boxes_overlap(boxA, boxB):
     Aminx, Aminy, Amaxx, Amaxy = boxA
     Bminx, Bminy, Bmaxx, Bmaxy = boxB
@@ -491,26 +486,21 @@ def try_expand_box(orig_box, other_boxes, img_width, img_height,
                    expand_w_factor=0.2, expand_h_factor=0.35,
                    margin=5, extra_padding=10):
     (min_x, min_y, max_x, max_y) = orig_box
-
     min_x = max(0, min_x - margin - extra_padding)
     min_y = max(0, min_y - margin - extra_padding)
     max_x = min(img_width, max_x + margin + extra_padding)
     max_y = min(img_height, max_y + margin + extra_padding)
 
     orig_expanded = (min_x, min_y, max_x, max_y)
-
     width = max_x - min_x
     height = max_y - min_y
     expand_w = width * expand_w_factor
     expand_h = height * expand_h_factor
-
     new_min_x = max(0, min_x - expand_w / 2)
     new_max_x = min(img_width, max_x + expand_w / 2)
     new_min_y = max(0, min_y - expand_h / 2)
     new_max_y = min(img_height, max_y + expand_h / 2)
-
     expanded_box = (new_min_x, new_min_y, new_max_x, new_max_y)
-
     for other in other_boxes:
         if other is None:
             continue
@@ -520,13 +510,11 @@ def try_expand_box(orig_box, other_boxes, img_width, img_height,
             continue
         if boxes_overlap(expanded_box, other["final_bbox"]):
             return orig_expanded
-
     return expanded_box
 
 def expand_boxes(items, img_width, img_height):
     for item in items:
         item["final_bbox"] = None
-
     for i, item in enumerate(items):
         orig_box = item["bbox"]
         expanded_box = try_expand_box(
@@ -552,6 +540,10 @@ def draw_preview_boxes(image_path, items):
     return img
 
 def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN):
+    """
+    Places white rectangles over each bounding box, then draws Pinyin (top) / English (bottom)
+    text lines with color-coded tokens.
+    """
     EXTRA_PADDING = 10
     SEPARATOR_PADDING = 10
     initial_font_size = 22
@@ -559,7 +551,6 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 
     img = Image.open(image_path).convert("RGBA")
     draw = ImageDraw.Draw(img)
-
     text_triplets = []
 
     for item in items:
@@ -572,6 +563,8 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 
         seg_eng, seg_mand, seg_pin = seg_result
 
+        # alignment_info is a dict with "raw_alignments" and "token_alignments"
+        # We'll store it in text_triplets so we can display actual token pairs
         text_triplets.append({
             "original_text": original_text,
             "seg_eng": seg_eng,
@@ -615,7 +608,7 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 
 # ------------------ STREAMLIT APP ------------------
 def main():
-    st.title("Batch CBZ Translator - Punctuation Stripped for Alignment, Then Re-Inserted")
+    st.title("Batch CBZ Translator - Show Actual Alignments (Tokens)")
 
     download_placeholder = st.empty()
 
@@ -655,17 +648,15 @@ def main():
                 annotations = detect_text_boxes(img_path)
                 if annotations:
                     merged_items = group_annotations(annotations)
-                    merged_items = expand_boxes(
-                        merged_items,
-                        Image.open(img_path).width,
-                        Image.open(img_path).height
-                    )
+                    merged_items = expand_boxes(merged_items,
+                                                Image.open(img_path).width,
+                                                Image.open(img_path).height)
 
                     # Show bounding box preview
                     preview_img = draw_preview_boxes(img_path, merged_items)
                     st.image(preview_img, caption=f"Bounding Box Preview: {os.path.basename(img_path)}")
 
-                    # Overlay
+                    # Overlay pinyin + English
                     final_img, text_triplets = overlay_merged_pinyin(
                         img_path, merged_items,
                         font_path=FONT_PATH,
@@ -673,13 +664,13 @@ def main():
                     )
                     st.image(final_img, caption=f"Final Overlay: {os.path.basename(img_path)}")
 
-                    # Print out recognized text, pinyin, alignment
+                    # Print out recognized text, alignment
                     for block_idx, data in enumerate(text_triplets, start=1):
                         st.write("---")
                         st.write(f"**Text Block {block_idx}:**")
                         st.write("**Original OCR Text:**")
                         st.write(data["original_text"])
-                    
+
                         st.write("**Chinese (segmented):**")
                         seg_chinese_str = " ".join([tok[0] for tok in data["seg_mand"]])
                         st.write(seg_chinese_str)
@@ -688,17 +679,13 @@ def main():
                         seg_pinyin_str = " ".join([tok[0] for tok in data["seg_pin"]])
                         st.write(seg_pinyin_str)
 
-                        st.write("**Word Alignments (English -> Chinese):**")
-                        seg_eng = data["seg_eng"]
-                        seg_mand = data["seg_mand"]
-                        for (src_i, tgt_j, prob) in data["alignment_info"]:
-                            # Because we used stripped text for alignment, these indexes
-                            # no longer match punctuation tokens. They are purely for reference.
-                            # We'll still show them if you want:
-                            if src_i < 9999 and tgt_j < 9999:  # dummy check
-                                # We didn't do an exact 1:1 map from alignment indexes to colored tokens here,
-                                # since punctuation is black. So just print them out:
-                                st.write(f" - (clean idx src={src_i}, tgt={tgt_j}, prob={prob:.3f})")
+                        # Now show the ACTUAL word alignments (token_alignments)
+                        alignment_info = data["alignment_info"]
+                        if "token_alignments" in alignment_info:
+                            token_alignments = alignment_info["token_alignments"]
+                            st.write("**Word Alignments (English token -> Chinese token):**")
+                            for (en_tok, cn_tok, prob) in token_alignments:
+                                st.write(f" - {en_tok} -> {cn_tok} (prob={prob:.3f})")
 
                     final_img.save(img_path)
 
@@ -707,6 +694,7 @@ def main():
             repack_to_cbz(temp_extract_folder, output_cbz_path)
             processed_cbz_paths.append(output_cbz_path)
 
+            # Cleanup
             shutil.rmtree(temp_extract_folder)
             progress_bar.progress(idx / total_files)
 
