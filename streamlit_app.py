@@ -14,7 +14,6 @@ from google.cloud import translate_v2 as translate
 from pypinyin import lazy_pinyin, Style
 import jieba
 from transformers import AutoTokenizer, AutoModel
-from collections import defaultdict, deque  # for BFS in connected-components
 
 # ------------------ LOAD GOOGLE CLOUD CREDENTIALS FROM SECRETS ------------------
 if "google_cloud" in st.secrets:
@@ -182,41 +181,26 @@ def detect_text_boxes(image_path):
     # text_annotations[0] is entire text, skip that
     return response.text_annotations[1:]
 
-# ------------------ AWESOME-ALIGN MODEL: CONNECTED COMPONENTS ------------------
+# ------------------ AWESOME-ALIGN MODEL ------------------
 @st.cache_resource
 def load_awesome_align_model():
     model = AutoModel.from_pretrained("aneuraz/awesome-align-with-co")
     tokenizer = AutoTokenizer.from_pretrained("aneuraz/awesome-align-with-co")
     return model, tokenizer
 
-def awesome_align_connected(english_text, chinese_text, threshold=0.7, align_layer=8):
-    """
-    Use Awesome-Align to build a bipartite graph (word-level) above a threshold,
-    then find connected components. Each connected component gets a unique color.
-    Returns:
-       color_map_eng: list of colors (len = #English words)
-       color_map_cn:  list of colors (len = #Chinese words)
-    """
-    model, tokenizer = load_awesome_align_model()
-    model.eval()
+def awesome_align(english_text, chinese_text):
+    align_layer = 8
+    th = 1e-3
 
-    # Split text into word-level
     sent_src = english_text.strip().split()
     sent_tgt = list(jieba.cut(chinese_text))
 
-    # If either side is empty
-    if not sent_src or not sent_tgt:
-        return ["black"] * len(sent_src), ["black"] * len(sent_tgt)
-
-    # Sub-tokenize each word
+    model, tokenizer = load_awesome_align_model()
     token_src = [tokenizer.tokenize(word) for word in sent_src]
     token_tgt = [tokenizer.tokenize(word) for word in sent_tgt]
-
-    # Convert tokens to IDs
     wid_src = [tokenizer.convert_tokens_to_ids(x) for x in token_src]
     wid_tgt = [tokenizer.convert_tokens_to_ids(x) for x in token_tgt]
 
-    # Flatten for model input
     ids_src = tokenizer.prepare_for_model(
         list(itertools.chain(*wid_src)),
         return_tensors='pt',
@@ -230,148 +214,141 @@ def awesome_align_connected(english_text, chinese_text, threshold=0.7, align_lay
         truncation=True
     )['input_ids']
 
-    # Map from subword index -> word index
     sub2word_map_src = []
     for i, word_list in enumerate(token_src):
         sub2word_map_src += [i] * len(word_list)
     sub2word_map_tgt = []
-    for j, word_list in enumerate(token_tgt):
-        sub2word_map_tgt += [j] * len(word_list)
+    for i, word_list in enumerate(token_tgt):
+        sub2word_map_tgt += [i] * len(word_list)
 
-    # Run the model to get hidden states
+    model.eval()
     with torch.no_grad():
-        outputs_src = model(ids_src.unsqueeze(0), output_hidden_states=True)
-        outputs_tgt = model(ids_tgt.unsqueeze(0), output_hidden_states=True)
-        out_src = outputs_src.hidden_states[align_layer][0, 1:-1]  # shape: (sub_src, hidden_dim)
-        out_tgt = outputs_tgt.hidden_states[align_layer][0, 1:-1]  # shape: (sub_tgt, hidden_dim)
-
-        # Dot product
-        dot_prod = torch.matmul(out_src, out_tgt.transpose(-1, -2))  # (sub_src, sub_tgt)
-
-        # Softmax in both directions
+        out_src = model(ids_src.unsqueeze(0), output_hidden_states=True)[2][align_layer][0, 1:-1]
+        out_tgt = model(ids_tgt.unsqueeze(0), output_hidden_states=True)[2][align_layer][0, 1:-1]
+        dot_prod = torch.matmul(out_src, out_tgt.transpose(-1, -2))
         softmax_srctgt = torch.nn.Softmax(dim=-1)(dot_prod)
         softmax_tgtsrc = torch.nn.Softmax(dim=-2)(dot_prod)
+        softmax_inter = (softmax_srctgt > th) * (softmax_tgtsrc > th)
 
-        # Intersection above threshold => "linked"
-        softmax_inter = (softmax_srctgt > threshold) & (softmax_tgtsrc > threshold)
+    align_subwords = torch.nonzero(softmax_inter, as_tuple=False)
+    align_dict = {}
+    for i_idx, j_idx in align_subwords:
+        prob = (softmax_srctgt[i_idx, j_idx].item() + softmax_tgtsrc[i_idx, j_idx].item()) / 2
+        key = (sub2word_map_src[i_idx], sub2word_map_tgt[j_idx])
+        align_dict.setdefault(key, []).append(prob)
 
-    # Build bipartite graph of word indices
-    adjacency = defaultdict(set)
-    len_src = len(sent_src)
-    len_tgt = len(sent_tgt)
-    offset = len_src
+    aggregated_alignments = {
+        (k[0], k[1], sum(v)/len(v)) for k, v in align_dict.items()
+    }
+    return str(aggregated_alignments)
 
-    # For each subword pair that meets threshold
-    indices = softmax_inter.nonzero(as_tuple=False)
-    for pair in indices:
-        i_idx, j_idx = pair[0].item(), pair[1].item()
-        if i_idx < len(sub2word_map_src) and j_idx < len(sub2word_map_tgt):
-            eI = sub2word_map_src[i_idx]       # English word index
-            tJ = sub2word_map_tgt[j_idx] + offset  # Chinese word index (offset)
-            adjacency[eI].add(tJ)
-            adjacency[tJ].add(eI)
-
-    # Find connected components
-    visited = set()
-    color_map_eng = ["black"] * len_src
-    color_map_cn = ["black"] * len_tgt
-
-    # A color palette
-    normal_palette = [
-        "blue", "green", "orange", "purple", "brown",
-        "cyan", "magenta", "olive", "teal", "navy",
-        "darkred", "darkgreen", "darkblue", "maroon"
-    ]
-    color_idx = 0
-
-    def bfs_component(start):
-        queue = deque([start])
-        component_nodes = []
-        visited.add(start)
-        while queue:
-            node = queue.popleft()
-            component_nodes.append(node)
-            for neigh in adjacency[node]:
-                if neigh not in visited:
-                    visited.add(neigh)
-                    queue.append(neigh)
-        return component_nodes
-
-    total_nodes = len_src + len_tgt
-    for node in range(total_nodes):
-        if node not in visited and node in adjacency:
-            # BFS to get entire connected component
-            comp_nodes = bfs_component(node)
-            color = normal_palette[color_idx % len(normal_palette)]
-            color_idx += 1
-
-            # Assign that color to each node in the component
-            for cnode in comp_nodes:
-                if cnode < len_src:
-                    color_map_eng[cnode] = color
-                else:
-                    cn_idx = cnode - offset
-                    if 0 <= cn_idx < len_tgt:
-                        color_map_cn[cn_idx] = color
-
-    return color_map_eng, color_map_cn
-
-# ------------------ MULTI-SENTENCE TRANSLATION & SEGMENTS (Connected Components) ------------------
+# ------------------ MULTI-SENTENCE TRANSLATION & SEGMENTS ------------------
 def translate_to_segments(english_text):
     """
     1) Split 'english_text' into multiple sentences.
     2) For each sentence:
-       - If it's all Korean, skip entirely.
-       - Filter out tokens that contain Korean, then translate to CN.
-       - Use the AWESOME-ALIGN connected-components to get color maps.
-       - Construct color-coded (English, Mandarin, Pinyin).
-    3) Return (seg_eng, seg_mand, seg_pin), placeholder alignment, combined CN.
+       - If it's all Korean, skip.
+       - Filter out tokens with Korean, translate leftover, run Awesome-Align.
+       - Color-code aligned tokens (English, Chinese, pinyin).
+    3) Concatenate the sentence-level tokens into a single set.
+       Return (segmented_eng, segmented_mand, segmented_pin), combined alignment placeholder, combined Chinese text.
     """
+
+    # Break up into naive sentences
     sentence_list = split_into_sentences(english_text)
 
+    # We'll accumulate tokens for all sentences
     all_seg_eng = []
     all_seg_mand = []
     all_seg_pin = []
+
+    normal_palette = [
+        "blue", "green", "orange", "purple", "brown",
+        "cyan", "magenta", "olive", "teal", "navy"
+    ]
+    color_idx = 0  # which color in the palette to use next
 
     for sent in sentence_list:
         # If it's purely Korean, skip alignment
         if is_all_korean(sent):
             continue
 
+        # Filter out tokens that contain ANY Korean
         filtered_text = filter_korean(sent)
         if not filtered_text.strip():
             continue
 
+        # Translate leftover text to Chinese
         cn_text = translate_text(filtered_text)
-        # Get color maps from connected-components alignment
-        color_map_eng, color_map_cn = awesome_align_connected(filtered_text, cn_text, threshold=0.7)
 
-        # Tokenize again
+        # Run Awesome-Align
+        mapping_str = awesome_align(filtered_text, cn_text)
+        st.write("Awesome-Align mapping (per sentence):", mapping_str)
+
+        # Parse the alignment string
+        try:
+            mapping_set = eval(mapping_str)
+            mapping_pairs = [tup for tup in mapping_set if len(tup) == 3]
+        except Exception as e:
+            st.write("Error parsing mapping_str:", e)
+            mapping_pairs = []
+
+        mapping_dict = {}
+        reverse_mapping = {}
+        for i, j, _ in mapping_pairs:
+            mapping_dict.setdefault(i, set()).add(j)
+            reverse_mapping.setdefault(j, set()).add(i)
+
+        # Tokenize English and Chinese
         sent_src = filtered_text.strip().split()
         sent_tgt = list(jieba.cut(cn_text))
 
-        # Build color-coded tokens
-        seg_eng = [(word, color_map_eng[i]) for i, word in enumerate(sent_src)]
-        seg_mand = [(word, color_map_cn[j]) for j, word in enumerate(sent_tgt)]
-        seg_pin = [(" ".join(lazy_pinyin(word, style=Style.TONE)), color_map_cn[j]) 
-                   for j, word in enumerate(sent_tgt)]
+        # Assign colors within this sentence
+        color_mapping = {}
+        for i, word in enumerate(sent_src):
+            if i in mapping_dict and color_idx < len(normal_palette):
+                color_mapping[i] = normal_palette[color_idx]
+                color_idx = (color_idx + 1) % len(normal_palette)
+            else:
+                color_mapping[i] = "black"
 
-        # Optional: add spacing between sentence segments (in black) if not empty
+        target_color_mapping = {}
+        for j, word in enumerate(sent_tgt):
+            if j in reverse_mapping:
+                # pick any aligned source index
+                source_index = list(reverse_mapping[j])[0]
+                target_color_mapping[j] = color_mapping.get(source_index, "black")
+            else:
+                target_color_mapping[j] = "black"
+
+        seg_eng = [(word, color_mapping.get(i, "black")) for i, word in enumerate(sent_src)]
+        seg_mand = [(word, target_color_mapping.get(j, "black")) for j, word in enumerate(sent_tgt)]
+        seg_pin = [
+            (" ".join(lazy_pinyin(word, style=Style.TONE)), target_color_mapping.get(j, "black"))
+            for j, word in enumerate(sent_tgt)
+        ]
+
+        # Add space tokens between sentence chunks (optional)
         if all_seg_eng:
             all_seg_eng.append((" ", "black"))
             all_seg_mand.append((" ", "black"))
             all_seg_pin.append((" ", "black"))
 
+        # Append tokens for this sentence
         all_seg_eng.extend(seg_eng)
         all_seg_mand.extend(seg_mand)
         all_seg_pin.extend(seg_pin)
 
+    # If we never got any tokens, it means the entire text was Korean or filtered out
     if not all_seg_eng:
-        # means everything was Korean or empty
         return None, "", english_text
 
+    # Combine final Chinese text for display (just concatenates the Chinese tokens)
     combined_chinese = " ".join([tok[0] for tok in all_seg_mand])
+    # We won't store a real alignment string for the entire multi-sentence text, 
+    # but we can put a placeholder
     mapping_str = "<multi-sentence alignment>"
+
     return (all_seg_eng, all_seg_mand, all_seg_pin), mapping_str, combined_chinese
 
 # ------------------ MERGING LOGIC ------------------
@@ -382,6 +359,9 @@ def bbox_for_annotation(ann):
     return min(xs), min(ys), max(xs), max(ys)
 
 def overlap_or_close(boxA, boxB, threshold=MERGE_THRESHOLD):
+    """
+    Merge logic uses a small threshold to see if they should combine as one text region.
+    """
     Aminx, Aminy, Amaxx, Amaxy = boxA
     Bminx, Bminy, Bmaxx, Bmaxy = boxB
     if Amaxx < Bminx - threshold or Bmaxx < Aminx - threshold:
@@ -428,7 +408,11 @@ def group_annotations(annotations):
         items = new_items
     return items
 
+# ------------------ HELPER: BOX OVERLAP WITHOUT THRESHOLD ------------------
 def boxes_overlap(boxA, boxB):
+    """
+    Simple bounding-box overlap check with zero threshold.
+    """
     Aminx, Aminy, Amaxx, Amaxy = boxA
     Bminx, Bminy, Bmaxx, Bmaxy = boxB
     if Amaxx < Bminx or Bmaxx < Aminx:
@@ -437,15 +421,20 @@ def boxes_overlap(boxA, boxB):
         return False
     return True
 
+# ------------------ HELPER: TRY EXPANDING A BOX ------------------
 def try_expand_box(orig_box, other_boxes, img_width, img_height,
-                   expand_w_factor=0.2, expand_h_factor=0.35,
+                   expand_w_factor=0.2, expand_h_factor=0.35,  # <-- CHANGED HERE
                    margin=5, extra_padding=10):
     """
-    Attempt to expand orig_box by some factor; revert if it overlaps other boxes.
+    Attempt to expand orig_box by 20% in width, *35%* in height
+    (was 25% originally), plus existing margin/padding.
+    If expansion causes overlap with any box in other_boxes, revert to original.
+
+    Returns the final (min_x, min_y, max_x, max_y).
     """
     (min_x, min_y, max_x, max_y) = orig_box
 
-    # Original expansions
+    # Original expansions (margin + padding)
     min_x = max(0, min_x - margin - extra_padding)
     min_y = max(0, min_y - margin - extra_padding)
     max_x = min(img_width, max_x + margin + extra_padding)
@@ -453,20 +442,26 @@ def try_expand_box(orig_box, other_boxes, img_width, img_height,
 
     orig_expanded = (min_x, min_y, max_x, max_y)
 
-    # Now expand by percentage
+    # Now compute the expand_w_factor & expand_h_factor expansions around the center
     width = max_x - min_x
     height = max_y - min_y
     expand_w = width * expand_w_factor
     expand_h = height * expand_h_factor
 
-    new_min_x = max(0, min_x - expand_w / 2)
-    new_max_x = min(img_width, max_x + expand_w / 2)
-    new_min_y = max(0, min_y - expand_h / 2)
-    new_max_y = min(img_height, max_y + expand_h / 2)
+    new_min_x = min_x - expand_w / 2
+    new_max_x = max_x + expand_w / 2
+    new_min_y = min_y - expand_h / 2
+    new_max_y = max_y + expand_h / 2
+
+    # Clamp to image boundaries
+    new_min_x = max(0, new_min_x)
+    new_min_y = max(0, new_min_y)
+    new_max_x = min(img_width, new_max_x)
+    new_max_y = min(img_height, new_max_y)
 
     expanded_box = (new_min_x, new_min_y, new_max_x, new_max_y)
 
-    # Check overlap
+    # Check overlap with others (excluding the original box itself).
     for other in other_boxes:
         if other is None:
             continue
@@ -482,10 +477,11 @@ def try_expand_box(orig_box, other_boxes, img_width, img_height,
 # ------------------ OVERLAY ------------------
 def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN):
     """
-    For each merged annotation box:
-      1) Expand the box if possible
-      2) If text is all Korean => skip
-      3) Otherwise => translate & color-code using connected components
+    For each annotation box, we do:
+      1) Attempt to expand the bounding box by 20% width, 35% height 
+         (unless it overlaps).
+      2) If text is all Korean, skip overlay.
+      3) Otherwise, translate & overlay pinyin on top, separator, then English.
     """
     EXTRA_PADDING = 10
     SEPARATOR_PADDING = 10
@@ -496,7 +492,7 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
     draw = ImageDraw.Draw(img)
     text_triplets = []
 
-    # First pass: expand each bounding box if possible
+    # === First pass: expand each bounding box if possible ===
     for item in items:
         item["final_bbox"] = None
 
@@ -508,26 +504,25 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
             img_width=img.width,
             img_height=img.height,
             expand_w_factor=0.2,
-            expand_h_factor=0.35,
+            expand_h_factor=0.35,  # vertical expansion increased
             margin=margin,
             extra_padding=EXTRA_PADDING
         )
         item["final_bbox"] = expanded_box
 
-    # Second pass: overlay text
+    # === Second pass: do the actual overlay with the final bounding box. ===
     for item in items:
         (min_x, min_y, max_x, max_y) = item["final_bbox"]
         original_text = item["text"].strip()
 
         seg_result, mapping_str, translated_text = translate_to_segments(original_text)
         if seg_result is None:
-            # purely Korean or empty after filtering
-            continue
+            continue  # all-Korean or empty after filtering
 
         seg_eng, seg_mand, seg_pin = seg_result
         text_triplets.append((original_text, (seg_eng, seg_mand, seg_pin), mapping_str, translated_text))
 
-        # Draw white rectangle + red outline
+        # Draw a white rectangle + red outline
         draw.rectangle([(min_x, min_y), (max_x, max_y)], fill=(255,255,255,255))
         draw.rectangle([(min_x, min_y), (max_x, max_y)], outline=(255,0,0,255), width=2)
 
@@ -551,7 +546,7 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
             else:
                 break
 
-        # Center them in the box
+        # Draw text
         start_y_text = min_y + (box_height - total_text_height) / 2
         start_y_text = draw_wrapped_lines(draw, pinyin_lines, font, min_x, start_y_text, box_width)
 
@@ -565,7 +560,7 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 
 # ------------------ STREAMLIT APP ------------------
 def main():
-    st.title("Batch CBZ Translator with Connected-Component Coloring")
+    st.title("Batch CBZ Translator with Box Expansion")
 
     # Create a placeholder at the top for a download button (we'll fill it later)
     download_placeholder = st.empty()
