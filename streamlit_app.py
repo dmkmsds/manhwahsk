@@ -286,7 +286,6 @@ def translate_to_segments(english_text):
         st.write("Awesome-Align mapping (per sentence):", mapping_str)
 
         # Parse the alignment string
-        # Parse the alignment string
         try:
             mapping_set = eval(mapping_str)
             mapping_pairs = [tup for tup in mapping_set if len(tup) == 3]
@@ -301,14 +300,10 @@ def translate_to_segments(english_text):
             if prob >= threshold:
                 e_node = f"e_{i}"
                 m_node = f"m_{j}"
-                if e_node not in graph:
-                    graph[e_node] = set()
-                if m_node not in graph:
-                    graph[m_node] = set()
-                graph[e_node].add(m_node)
-                graph[m_node].add(e_node)
+                graph.setdefault(e_node, set()).add(m_node)
+                graph.setdefault(m_node, set()).add(e_node)
 
-        # Find connected components in the graph via DFS
+        # Find connected components in the graph using DFS
         components = []
         visited = set()
         for node in graph:
@@ -316,31 +311,25 @@ def translate_to_segments(english_text):
                 comp = set()
                 stack = [node]
                 while stack:
-                    curr = stack.pop()
-                    if curr not in visited:
-                        visited.add(curr)
-                        comp.add(curr)
-                        for neighbor in graph[curr]:
-                            if neighbor not in visited:
-                                stack.append(neighbor)
+                    cur = stack.pop()
+                    if cur not in visited:
+                        visited.add(cur)
+                        comp.add(cur)
+                        stack.extend(graph[cur] - visited)
                 components.append(comp)
 
-        # Tokenize English and Mandarin text
+        # Tokenize English and Chinese text
         sent_src = filtered_text.strip().split()
         sent_tgt = list(jieba.cut(cn_text))
 
         # Assign colors based on connected components
-        normal_palette = [
-            "blue", "green", "orange", "purple", "brown",
-            "cyan", "magenta", "olive", "teal", "navy"
-        ]
-        color_mapping = {}         # For English tokens: index -> color
-        target_color_mapping = {}  # For Mandarin tokens: index -> color
-        color_idx_local = 0
+        color_mapping = {}         # English token index -> color
+        target_color_mapping = {}  # Mandarin token index -> color
+        palette_index = 0
         for comp in components:
-            if color_idx_local < len(normal_palette):
-                assigned_color = normal_palette[color_idx_local]
-                color_idx_local += 1
+            if palette_index < len(normal_palette):
+                assigned_color = normal_palette[palette_index]
+                palette_index += 1
             else:
                 assigned_color = "black"
             for node in comp:
@@ -351,7 +340,7 @@ def translate_to_segments(english_text):
                     idx = int(node.split("_")[1])
                     target_color_mapping[idx] = assigned_color
 
-        # For any tokens not in any component, assign default black color
+        # For tokens not part of any connected component, assign default black
         for i in range(len(sent_src)):
             if i not in color_mapping:
                 color_mapping[i] = "black"
@@ -359,45 +348,10 @@ def translate_to_segments(english_text):
             if j not in target_color_mapping:
                 target_color_mapping[j] = "black"
 
-        seg_eng = [(word, color_mapping.get(i, "black")) for i, word in enumerate(sent_src)]
-        seg_mand = [(word, target_color_mapping.get(j, "black")) for j, word in enumerate(sent_tgt)]
-        seg_pin = [
-            (" ".join(lazy_pinyin(word, style=Style.TONE)), target_color_mapping.get(j, "black"))
-            for j, word in enumerate(sent_tgt)
-        ]
-
-        #"-------------------------------------------------------------------------"
-
-        
-
-        # Tokenize English and Chinese
-        sent_src = filtered_text.strip().split()
-        sent_tgt = list(jieba.cut(cn_text))
-
-        # Assign colors within this sentence
-        color_mapping = {}
-        for i, word in enumerate(sent_src):
-            if i in mapping_dict and color_idx < len(normal_palette):
-                color_mapping[i] = normal_palette[color_idx]
-                color_idx = (color_idx + 1) % len(normal_palette)
-            else:
-                color_mapping[i] = "black"
-
-        target_color_mapping = {}
-        for j, word in enumerate(sent_tgt):
-            if j in reverse_mapping:
-                # pick any aligned source index
-                source_index = list(reverse_mapping[j])[0]
-                target_color_mapping[j] = color_mapping.get(source_index, "black")
-            else:
-                target_color_mapping[j] = "black"
-
-        seg_eng = [(word, color_mapping.get(i, "black")) for i, word in enumerate(sent_src)]
-        seg_mand = [(word, target_color_mapping.get(j, "black")) for j, word in enumerate(sent_tgt)]
-        seg_pin = [
-            (" ".join(lazy_pinyin(word, style=Style.TONE)), target_color_mapping.get(j, "black"))
-            for j, word in enumerate(sent_tgt)
-        ]
+        seg_eng = [(word, color_mapping[i]) for i, word in enumerate(sent_src)]
+        seg_mand = [(word, target_color_mapping[j]) for j, word in enumerate(sent_tgt)]
+        seg_pin = [(" ".join(lazy_pinyin(word, style=Style.TONE)), target_color_mapping[j])
+                   for j, word in enumerate(sent_tgt)]
 
         # Add space tokens between sentence chunks (optional)
         if all_seg_eng:
@@ -421,6 +375,7 @@ def translate_to_segments(english_text):
     mapping_str = "<multi-sentence alignment>"
 
     return (all_seg_eng, all_seg_mand, all_seg_pin), mapping_str, combined_chinese
+
 
 # ------------------ MERGING LOGIC ------------------
 def bbox_for_annotation(ann):
