@@ -293,65 +293,40 @@ def translate_to_segments(english_text):
             st.write("Error parsing mapping_str:", e)
             mapping_pairs = []
 
-        # Build a bipartite graph using a threshold of 0.6
-        threshold = 0.55
-        graph = {}
-        for i, j, prob in mapping_pairs:
-            if prob >= threshold:
-                e_node = f"e_{i}"
-                m_node = f"m_{j}"
-                graph.setdefault(e_node, set()).add(m_node)
-                graph.setdefault(m_node, set()).add(e_node)
+        mapping_dict = {}
+        reverse_mapping = {}
+        for i, j, _ in mapping_pairs:
+            mapping_dict.setdefault(i, set()).add(j)
+            reverse_mapping.setdefault(j, set()).add(i)
 
-        # Find connected components in the graph using DFS
-        components = []
-        visited = set()
-        for node in graph:
-            if node not in visited:
-                comp = set()
-                stack = [node]
-                while stack:
-                    cur = stack.pop()
-                    if cur not in visited:
-                        visited.add(cur)
-                        comp.add(cur)
-                        stack.extend(graph[cur] - visited)
-                components.append(comp)
-
-        # Tokenize English and Chinese text
+        # Tokenize English and Chinese
         sent_src = filtered_text.strip().split()
         sent_tgt = list(jieba.cut(cn_text))
 
-        # Assign colors based on connected components
-        color_mapping = {}         # English token index -> color
-        target_color_mapping = {}  # Mandarin token index -> color
-        palette_index = 0
-        for comp in components:
-            if palette_index < len(normal_palette):
-                assigned_color = normal_palette[palette_index]
-                palette_index += 1
+        # Assign colors within this sentence
+        color_mapping = {}
+        for i, word in enumerate(sent_src):
+            if i in mapping_dict and color_idx < len(normal_palette):
+                color_mapping[i] = normal_palette[color_idx]
+                color_idx = (color_idx + 1) % len(normal_palette)
             else:
-                assigned_color = "black"
-            for node in comp:
-                if node.startswith("e_"):
-                    idx = int(node.split("_")[1])
-                    color_mapping[idx] = assigned_color
-                elif node.startswith("m_"):
-                    idx = int(node.split("_")[1])
-                    target_color_mapping[idx] = assigned_color
-
-        # For tokens not part of any connected component, assign default black
-        for i in range(len(sent_src)):
-            if i not in color_mapping:
                 color_mapping[i] = "black"
-        for j in range(len(sent_tgt)):
-            if j not in target_color_mapping:
+
+        target_color_mapping = {}
+        for j, word in enumerate(sent_tgt):
+            if j in reverse_mapping:
+                # pick any aligned source index
+                source_index = list(reverse_mapping[j])[0]
+                target_color_mapping[j] = color_mapping.get(source_index, "black")
+            else:
                 target_color_mapping[j] = "black"
 
-        seg_eng = [(word, color_mapping[i]) for i, word in enumerate(sent_src)]
-        seg_mand = [(word, target_color_mapping[j]) for j, word in enumerate(sent_tgt)]
-        seg_pin = [(" ".join(lazy_pinyin(word, style=Style.TONE)), target_color_mapping[j])
-                   for j, word in enumerate(sent_tgt)]
+        seg_eng = [(word, color_mapping.get(i, "black")) for i, word in enumerate(sent_src)]
+        seg_mand = [(word, target_color_mapping.get(j, "black")) for j, word in enumerate(sent_tgt)]
+        seg_pin = [
+            (" ".join(lazy_pinyin(word, style=Style.TONE)), target_color_mapping.get(j, "black"))
+            for j, word in enumerate(sent_tgt)
+        ]
 
         # Add space tokens between sentence chunks (optional)
         if all_seg_eng:
@@ -375,7 +350,6 @@ def translate_to_segments(english_text):
     mapping_str = "<multi-sentence alignment>"
 
     return (all_seg_eng, all_seg_mand, all_seg_pin), mapping_str, combined_chinese
-
 
 # ------------------ MERGING LOGIC ------------------
 def bbox_for_annotation(ann):
@@ -606,7 +580,21 @@ def main():
     st.write("Upload multiple CBZ files (only for your session).")
     uploaded_files = st.file_uploader("Upload CBZ Files", type=["cbz"], accept_multiple_files=True)
 
+    # --- AUDIO PLAYBACK TO KEEP TAB ACTIVE ---
+    # The following placeholders will handle audio playback and status.
+    audio_placeholder = st.empty()
+    status_placeholder = st.empty()
+
     if uploaded_files:
+        # Try to load and play the audio file.
+        try:
+            with open("background.mp3", "rb") as audio_file:
+                audio_bytes = audio_file.read()
+            audio_placeholder.audio(audio_bytes, format="audio/mp3")
+            status_placeholder.info("Audio is playing...")
+        except Exception as e:
+            status_placeholder.warning("Audio file not found. Audio playback skipped.")
+
         progress_bar = st.progress(0)
         total_files = len(uploaded_files)
         processed_cbz_paths = []
@@ -662,6 +650,11 @@ def main():
             file_name="processed_cbz_files.zip",
             mime="application/zip"
         )
+
+        # Add a button to manually stop the audio (since we cannot detect the download event automatically)
+        if st.button("Stop Audio"):
+            audio_placeholder.empty()
+            status_placeholder.info("Audio stopped.")
 
     # Optional button to reset
     if st.button("Clear My Session Files"):
