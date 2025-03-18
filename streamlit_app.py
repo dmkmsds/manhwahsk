@@ -585,15 +585,16 @@ def main():
     audio_placeholder = st.empty()
     status_placeholder = st.empty()
 
+    # Try to load and play the audio file.
+    try:
+        with open("1-hour-and-20-minutes-of-silence.mp3", "rb") as audio_file:
+            audio_bytes = audio_file.read()
+        audio_placeholder.audio(audio_bytes, format="audio/mp3")
+        status_placeholder.info("Audio is playing...")
+    except Exception as e:
+        status_placeholder.warning("Audio file not found.)
+
     if uploaded_files:
-        # Try to load and play the audio file.
-        try:
-            with open("1-hour-and-20-minutes-of-silence.mp3", "rb") as audio_file:
-                audio_bytes = audio_file.read()
-            audio_placeholder.audio(audio_bytes, format="audio/mp3")
-            status_placeholder.info("Audio is playing...")
-        except Exception as e:
-            status_placeholder.warning("Audio file not found. Audio playback skipped.")
 
         progress_bar = st.progress(0)
         total_files = len(uploaded_files)
