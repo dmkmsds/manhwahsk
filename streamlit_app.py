@@ -1,5 +1,5 @@
-import json
 import streamlit as st
+import json
 import os
 import zipfile
 import io
@@ -14,7 +14,8 @@ from google.cloud import translate_v2 as translate
 from pypinyin import lazy_pinyin, Style
 import jieba
 from transformers import AutoTokenizer, AutoModel
-from collections import defaultdict, deque  # for BFS in connected-components
+from collections import defaultdict, deque
+import base64
 
 # ------------------ LOAD GOOGLE CLOUD CREDENTIALS FROM SECRETS ------------------
 if "google_cloud" in st.secrets:
@@ -55,7 +56,7 @@ def split_into_sentences(text):
     for i in range(0, len(parts), 2):
         raw_sent = parts[i].strip()
         if i + 1 < len(parts):
-            raw_sent += parts[i+1]  # attach punctuation
+            raw_sent += parts[i+1]
         raw_sent = raw_sent.strip()
         if raw_sent:
             sentences.append(raw_sent)
@@ -93,7 +94,7 @@ def translate_text(english_text):
     return cn_text
 
 # ------------------ FONTS & WRAPPING ------------------
-FONT_PATH = "NotoSans-Regular.ttf"  # Provide a valid path to your font
+FONT_PATH = "NotoSans-Regular.ttf"  # Provide a valid path to your .ttf font
 MARGIN = 5
 MERGE_THRESHOLD = 20
 
@@ -186,6 +187,9 @@ def detect_text_boxes(image_path):
 # ------------------ AWESOME-ALIGN MODEL: CONNECTED COMPONENTS ------------------
 @st.cache_resource
 def load_awesome_align_model():
+    """
+    Loads the Awesome-Align model once per session.
+    """
     model = AutoModel.from_pretrained("aneuraz/awesome-align-with-co")
     tokenizer = AutoTokenizer.from_pretrained("aneuraz/awesome-align-with-co")
     return model, tokenizer
@@ -195,8 +199,8 @@ def awesome_align_connected(english_text, chinese_text, threshold=0.7, align_lay
     Use Awesome-Align to build a bipartite graph (word-level) above a threshold,
     then find connected components. Each connected component gets a unique color.
     Returns:
-       color_map_eng: list of colors (len = #English words)
-       color_map_cn:  list of colors (len = #Chinese words)
+       color_map_eng (list of colors for English words),
+       color_map_cn  (list of colors for Chinese words).
     """
     model, tokenizer = load_awesome_align_model()
     model.eval()
@@ -218,16 +222,17 @@ def awesome_align_connected(english_text, chinese_text, threshold=0.7, align_lay
     wid_tgt = [tokenizer.convert_tokens_to_ids(x) for x in token_tgt]
 
     # Flatten for model input
+    flat_src = list(itertools.chain(*wid_src))
+    flat_tgt = list(itertools.chain(*wid_tgt))
+
     ids_src = tokenizer.prepare_for_model(
-        list(itertools.chain(*wid_src)),
+        flat_src,
         return_tensors='pt',
-        model_max_length=tokenizer.model_max_length,
         truncation=True
     )['input_ids']
     ids_tgt = tokenizer.prepare_for_model(
-        list(itertools.chain(*wid_tgt)),
+        flat_tgt,
         return_tensors='pt',
-        model_max_length=tokenizer.model_max_length,
         truncation=True
     )['input_ids']
 
@@ -235,6 +240,7 @@ def awesome_align_connected(english_text, chinese_text, threshold=0.7, align_lay
     sub2word_map_src = []
     for i, word_list in enumerate(token_src):
         sub2word_map_src += [i] * len(word_list)
+
     sub2word_map_tgt = []
     for j, word_list in enumerate(token_tgt):
         sub2word_map_tgt += [j] * len(word_list)
@@ -243,11 +249,12 @@ def awesome_align_connected(english_text, chinese_text, threshold=0.7, align_lay
     with torch.no_grad():
         outputs_src = model(ids_src.unsqueeze(0), output_hidden_states=True)
         outputs_tgt = model(ids_tgt.unsqueeze(0), output_hidden_states=True)
+
         out_src = outputs_src.hidden_states[align_layer][0, 1:-1]  # shape: (sub_src, hidden_dim)
         out_tgt = outputs_tgt.hidden_states[align_layer][0, 1:-1]  # shape: (sub_tgt, hidden_dim)
 
         # Dot product
-        dot_prod = torch.matmul(out_src, out_tgt.transpose(-1, -2))  # (sub_src, sub_tgt)
+        dot_prod = torch.matmul(out_src, out_tgt.transpose(-1, -2))
 
         # Softmax in both directions
         softmax_srctgt = torch.nn.Softmax(dim=-1)(dot_prod)
@@ -262,7 +269,6 @@ def awesome_align_connected(english_text, chinese_text, threshold=0.7, align_lay
     len_tgt = len(sent_tgt)
     offset = len_src
 
-    # For each subword pair that meets threshold
     indices = softmax_inter.nonzero(as_tuple=False)
     for pair in indices:
         i_idx, j_idx = pair[0].item(), pair[1].item()
@@ -277,8 +283,7 @@ def awesome_align_connected(english_text, chinese_text, threshold=0.7, align_lay
     color_map_eng = ["black"] * len_src
     color_map_cn = ["black"] * len_tgt
 
-    # A color palette
-    normal_palette = [
+    color_palette = [
         "blue", "green", "orange", "purple", "brown",
         "cyan", "magenta", "olive", "teal", "navy",
         "darkred", "darkgreen", "darkblue", "maroon"
@@ -301,12 +306,9 @@ def awesome_align_connected(english_text, chinese_text, threshold=0.7, align_lay
     total_nodes = len_src + len_tgt
     for node in range(total_nodes):
         if node not in visited and node in adjacency:
-            # BFS to get entire connected component
             comp_nodes = bfs_component(node)
-            color = normal_palette[color_idx % len(normal_palette)]
+            color = color_palette[color_idx % len(color_palette)]
             color_idx += 1
-
-            # Assign that color to each node in the component
             for cnode in comp_nodes:
                 if cnode < len_src:
                     color_map_eng[cnode] = color
@@ -335,23 +337,18 @@ def translate_to_segments(english_text):
     all_seg_pin = []
 
     for sent in sentence_list:
-        # If it's purely Korean, skip alignment
         if is_all_korean(sent):
+            # If purely Korean, skip alignment
             continue
-
         filtered_text = filter_korean(sent)
         if not filtered_text.strip():
             continue
 
         cn_text = translate_text(filtered_text)
-        # Get color maps from connected-components alignment
         color_map_eng, color_map_cn = awesome_align_connected(filtered_text, cn_text, threshold=0.7)
-
-        # Tokenize again
         sent_src = filtered_text.strip().split()
         sent_tgt = list(jieba.cut(cn_text))
 
-        # Build color-coded tokens
         seg_eng = [(word, color_map_eng[i]) for i, word in enumerate(sent_src)]
         seg_mand = [(word, color_map_cn[j]) for j, word in enumerate(sent_tgt)]
         seg_pin = [
@@ -370,7 +367,7 @@ def translate_to_segments(english_text):
         all_seg_pin.extend(seg_pin)
 
     if not all_seg_eng:
-        # means everything was Korean or empty
+        # Means everything was Korean or no text left
         return None, "", english_text
 
     combined_chinese = " ".join([tok[0] for tok in all_seg_mand])
@@ -410,6 +407,7 @@ def group_annotations(annotations):
     items = []
     for ann in annotations:
         items.append({"bbox": bbox_for_annotation(ann), "text": ann.description})
+
     merged = True
     while merged:
         merged = False
@@ -487,9 +485,8 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
     """
     For each merged annotation box:
       1) Expand the box if possible
-      2) If text is all Korean => skip
-      3) Otherwise => translate & color-code using connected components
-      Returns the final image + text_triplets for reference
+      2) Translate & color-code using connected components (unless purely Korean)
+      3) Overlay the Pinyin & English text in the bounding box
     """
     EXTRA_PADDING = 10
     SEPARATOR_PADDING = 10
@@ -525,7 +522,7 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 
         seg_result, mapping_str, translated_text = translate_to_segments(original_text)
         if seg_result is None:
-            # purely Korean or empty after filtering
+            # purely Korean or empty => skip
             continue
 
         seg_eng, seg_mand, seg_pin = seg_result
@@ -544,6 +541,7 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
             if os.path.exists(font_path):
                 font = ImageFont.truetype(font_path, font_size)
             else:
+                # Fallback if no TTF found
                 font = ImageFont.load_default()
 
             pinyin_lines, pinyin_height = wrap_tokens(seg_pin, font, box_width)
@@ -555,14 +553,15 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
             else:
                 break
 
-        # Center them in the box
+        # Center them vertically
         start_y_text = min_y + (box_height - total_text_height) / 2
+        # Draw Pinyin
         start_y_text = draw_wrapped_lines(draw, pinyin_lines, font, min_x, start_y_text, box_width)
-
+        # A small separator line
         start_y_text += SEPARATOR_PADDING
         draw.line([(min_x, start_y_text), (min_x + box_width, start_y_text)], fill="black", width=1)
         start_y_text += 1
-
+        # Draw English
         draw_wrapped_lines(draw, english_lines, font, min_x, start_y_text, box_width)
 
     return img.convert("RGB"), text_triplets
@@ -571,8 +570,56 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 def main():
     st.title("Batch CBZ Translator with Connected-Component Coloring")
 
-    # Create a placeholder at the top for a download button (we'll fill it later)
-    download_placeholder = st.empty()
+    # --------------------------------------------------------------------
+    # 1) Inject a short silent audio track that loops in the background,
+    #    plus a status indicator that updates on play/pause/error.
+    # --------------------------------------------------------------------
+    silent_mp3_b64 = (
+        "SUQzAwAAAAAAOAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+    )
+
+    # We'll show a message (p#audio_status). The audio is hidden from the UI.
+    # It's muted so Chrome is more likely to allow autoplay. If you want to unmute it,
+    # remove the 'muted' attribute, but Chrome may block it until user interaction.
+    audio_html = f"""
+    <audio id="silentaudio" autoplay loop muted style="display:none;">
+        <source src="data:audio/mp3;base64,{silent_mp3_b64}" type="audio/mp3">
+    </audio>
+    <p id="audio_status" style="color: green; font-weight: bold;">
+       Attempting to play silent audio...
+    </p>
+    <script>
+    var audioElem = document.getElementById("silentaudio");
+    var statusElem = document.getElementById("audio_status");
+
+    // If the audio actually starts playing, update status text:
+    audioElem.addEventListener("play", function() {{
+        statusElem.innerHTML = "Silent audio is now PLAYING (keeps tab active).";
+    }});
+
+    // If the audio is paused (e.g. blocked, or we manually stop it), update text:
+    audioElem.addEventListener("pause", function() {{
+        statusElem.innerHTML = "Silent audio is PAUSED (autoplay may be blocked).";
+    }});
+
+    // Handle potential errors (like autoplay restrictions):
+    audioElem.addEventListener("error", function() {{
+        statusElem.innerHTML = "ERROR playing audio (likely blocked).";
+    }});
+
+    // A function we can call to stop the audio
+    function stopAudio() {{
+        if(audioElem) {{
+            audioElem.pause();
+            audioElem.currentTime = 0;
+            statusElem.innerHTML = "Silent audio STOPPED manually.";
+        }}
+    }}
+    </script>
+    """
+    st.markdown(audio_html, unsafe_allow_html=True)
 
     if "session_id" not in st.session_state:
         st.session_state["session_id"] = str(uuid.uuid4())
@@ -613,13 +660,13 @@ def main():
                     final_img, text_triplets = overlay_merged_pinyin(
                         img_path, merged_items,
                         font_path=FONT_PATH,
-                        margin=MARGIN
+                        margin=5  # or MARGIN if you want to keep that variable
                     )
-                    
+
                     # Save the new image back to the same path
                     final_img.save(img_path)
 
-                    # -- Display in Streamlit (so you can see without downloading) --
+                    # -- Display in Streamlit (preview) --
                     st.subheader(f"Processed Image: {os.path.basename(img_path)}")
                     st.image(final_img, caption=os.path.basename(img_path), use_column_width=True)
 
@@ -628,10 +675,6 @@ def main():
                         st.markdown(f"**Original Text:** {orig_text}")
                         st.markdown(f"**Chinese Translation:** {cn_text}")
                         st.markdown(f"**Alignment Info (placeholder):** {align_str}")
-                        # If you want to show the color-coded tokens, you can also print seg_eng, seg_mand, etc.
-                        # st.write("seg_eng:", seg_eng)
-                        # st.write("seg_mand:", seg_mand)
-                        # st.write("seg_pin:", seg_pin)
                         st.write("---")
 
             # Repack to CBZ
@@ -645,25 +688,30 @@ def main():
 
         st.success("Processing complete!")
 
-        # Create a ZIP of all processed CBZ
-        final_zip = io.BytesIO()
-        with zipfile.ZipFile(final_zip, "w") as zf:
+        # Create a ZIP of all processed CBZ in memory
+        final_zip_bytes = io.BytesIO()
+        with zipfile.ZipFile(final_zip_bytes, "w") as zf:
             for file in sorted(os.listdir(output_folder)):
                 if file.lower().endswith(".cbz"):
                     full_path = os.path.join(output_folder, file)
                     zf.write(full_path, arcname=file)
+        final_zip_bytes.seek(0)
 
-        final_zip.seek(0)
+        # Convert to Base64
+        zip_b64 = base64.b64encode(final_zip_bytes.read()).decode("utf-8")
 
-        # Place the download button in our placeholder *at the top*
-        download_placeholder.download_button(
-            label="Download Processed CBZ Files (ZIP)",
-            data=final_zip,
-            file_name="processed_cbz_files.zip",
-            mime="application/zip"
-        )
+        # Provide a custom download link that calls `stopAudio()` in JS
+        download_html = f"""
+            <a href="data:application/zip;base64,{zip_b64}" 
+               download="processed_cbz_files.zip" 
+               onclick="stopAudio();"  <!-- This calls our JS function to stop audio -->
+               style="font-size:1.2em; font-weight:bold; color:blue;">
+               ► Download Processed CBZ Files (ZIP)
+            </a>
+        """
+        st.markdown(download_html, unsafe_allow_html=True)
 
-    # Optional button to reset
+    # Optional button to reset / clear
     if st.button("Clear My Session Files"):
         shutil.rmtree(base_temp_folder, ignore_errors=True)
         shutil.rmtree(output_folder, ignore_errors=True)
