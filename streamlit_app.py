@@ -571,17 +571,24 @@ def main():
     st.title("Batch CBZ Translator with Connected-Component Coloring")
 
     # --------------------------------------------------------------------
-    # 1) Inject an audible audio track that loops in the background,
+    # 1) Inject a short silent audio track that loops in the background,
     #    plus a status indicator that updates on play/pause/error.
     # --------------------------------------------------------------------
-    audible_audio_url = "https://www.soundjay.com/button/beep-07.wav"
-    # The audio element is now visible with controls, so the user can hear it.
+    silent_mp3_b64 = (
+        "SUQzAwAAAAAAOAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+    )
+
+    # We'll show a message (p#audio_status). The audio is hidden from the UI.
+    # It's muted so Chrome is more likely to allow autoplay. If you want to unmute it,
+    # remove the 'muted' attribute, but Chrome may block it until user interaction.
     audio_html = f"""
-    <audio id="silentaudio" autoplay loop controls>
-        <source src="{audible_audio_url}" type="audio/wav">
+    <audio id="silentaudio" autoplay loop muted style="display:none;">
+        <source src="data:audio/mp3;base64,{silent_mp3_b64}" type="audio/mp3">
     </audio>
     <p id="audio_status" style="color: green; font-weight: bold;">
-       Attempting to play audible audio...
+       Attempting to play silent audio...
     </p>
     <script>
     var audioElem = document.getElementById("silentaudio");
@@ -589,17 +596,17 @@ def main():
 
     // If the audio actually starts playing, update status text:
     audioElem.addEventListener("play", function() {{
-        statusElem.innerHTML = "Audible audio is now PLAYING.";
+        statusElem.innerHTML = "Silent audio is now PLAYING (keeps tab active).";
     }});
 
     // If the audio is paused (e.g. blocked, or we manually stop it), update text:
     audioElem.addEventListener("pause", function() {{
-        statusElem.innerHTML = "Audible audio is PAUSED.";
+        statusElem.innerHTML = "Silent audio is PAUSED (autoplay may be blocked).";
     }});
 
     // Handle potential errors (like autoplay restrictions):
     audioElem.addEventListener("error", function() {{
-        statusElem.innerHTML = "ERROR playing audio.";
+        statusElem.innerHTML = "ERROR playing audio (likely blocked).";
     }});
 
     // A function we can call to stop the audio
@@ -607,7 +614,7 @@ def main():
         if(audioElem) {{
             audioElem.pause();
             audioElem.currentTime = 0;
-            statusElem.innerHTML = "Audible audio STOPPED manually.";
+            statusElem.innerHTML = "Silent audio STOPPED manually.";
         }}
     }}
     </script>
@@ -693,7 +700,7 @@ def main():
         # Convert to Base64
         zip_b64 = base64.b64encode(final_zip_bytes.read()).decode("utf-8")
 
-        # Provide a custom download link that calls `stopAudio()` in JS
+        # Provide a custom download link that calls stopAudio() in JS
         download_html = f"""
             <a href="data:application/zip;base64,{zip_b64}" 
                download="processed_cbz_files.zip" 
