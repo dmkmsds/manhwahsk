@@ -636,9 +636,7 @@ def main():
                         st.write(f"**Text Block {block_idx}:**")
                         st.write("**Original OCR Text:**")
                         st.write(data["original_text"])
-                        
-                        st.write("**into awesome align:**")
-                        st.write(filtered_text)
+                    
                         
 
                         st.write("**Chinese (segmented):**")
