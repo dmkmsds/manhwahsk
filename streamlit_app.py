@@ -46,10 +46,10 @@ def filter_korean(text):
 
 def tokenize_with_punctuation(text):
     # Insert spaces around any non-alphanumeric/underscore character
-    # so that punctuation becomes its own token.
-    text = re.sub(r"([^\w\s])", r" \1 ", text)
-    # Collapse multiple spaces down to one
-    text = re.sub(r"\s+", " ", text)
+    # so punctuation becomes its own token
+    text = re.sub(r'([^\w\s])', r' \1 ', text)
+    # Turn multiple spaces into a single space
+    text = re.sub(r'\s+', ' ', text)
     return text.strip().split()
 
 def split_into_sentences(text):
