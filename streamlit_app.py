@@ -610,13 +610,13 @@ def main():
     }});
 
     // A function we can call to stop the audio
-    function stopAudio(){
-        if(audioElem){
+    function stopAudio() {{
+        if(audioElem) {{
             audioElem.pause();
             audioElem.currentTime = 0;
             statusElem.innerHTML = "Silent audio STOPPED manually.";
-        }
-    }
+        }}
+    }}
     </script>
     """
     st.markdown(audio_html, unsafe_allow_html=True)
@@ -660,9 +660,9 @@ def main():
                     final_img, text_triplets = overlay_merged_pinyin(
                         img_path, merged_items,
                         font_path=FONT_PATH,
-                        margin=MARGIN
+                        margin=5  # or MARGIN if you want to keep that variable
                     )
-                    
+
                     # Save the new image back to the same path
                     final_img.save(img_path)
 
