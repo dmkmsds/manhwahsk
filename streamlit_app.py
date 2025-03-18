@@ -636,6 +636,10 @@ def main():
                         st.write(f"**Text Block {block_idx}:**")
                         st.write("**Original OCR Text:**")
                         st.write(data["original_text"])
+                        
+                        st.write("**into awesome align:**")
+                        st.write(filtered_text)
+                        
 
                         st.write("**Chinese (segmented):**")
                         seg_chinese_str = " ".join([tok[0] for tok in data["seg_mand"]])
