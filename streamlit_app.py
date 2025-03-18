@@ -190,7 +190,7 @@ def load_awesome_align_model():
     tokenizer = AutoTokenizer.from_pretrained("aneuraz/awesome-align-with-co")
     return model, tokenizer
 
-def awesome_align_connected(english_text, chinese_text, threshold=0.6, align_layer=9):
+def awesome_align_connected(english_text, chinese_text, threshold=0.6, align_layer=8):
     """
     Use Awesome-Align to build a bipartite graph (word-level) above a threshold,
     then find connected components. Each connected component gets a unique color.
