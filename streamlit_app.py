@@ -44,6 +44,14 @@ def filter_korean(text):
     filtered_tokens = [tok for tok in tokens if not re.search(r'[\uac00-\ud7a3]', tok)]
     return " ".join(filtered_tokens)
 
+def tokenize_with_punctuation(text):
+    # Insert spaces around any non-alphanumeric/underscore character
+    # so that punctuation becomes its own token.
+    text = re.sub(r"([^\w\s])", r" \1 ", text)
+    # Collapse multiple spaces down to one
+    text = re.sub(r"\s+", " ", text)
+    return text.strip().split()
+
 def split_into_sentences(text):
     """
     Naive approach to split text into sentences based on '.', '?', and '!' delimiters.
@@ -292,7 +300,7 @@ def translate_to_segments(english_text):
         all_alignment_info.extend(align_list)
 
         # Tokenize English and Chinese
-        sent_src = filtered_text.strip().split()
+        sent_src = tokenize_with_punctuation(filtered_text)
         sent_tgt = list(jieba.cut(cn_text))
 
         # Prepare color mappings
