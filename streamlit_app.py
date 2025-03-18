@@ -572,36 +572,40 @@ def main():
 
     # --------------------------------------------------------------------
     # 1) Inject an audible audio track that loops in the background,
-    #    plus a status indicator that updates on play/pause/error.
+    #    with a visible "Start Audio" button so that the user can initiate playback.
+    #    The audio will continue playing until the user presses the download button.
     # --------------------------------------------------------------------
     audible_audio_url = "https://www.soundjay.com/button/beep-07.wav"
-    # The audio element is now visible with controls, so the user can hear it.
     audio_html = f"""
-    <audio id="silentaudio" autoplay loop controls>
+    <audio id="audibleAudio" loop style="display:none;">
         <source src="{audible_audio_url}" type="audio/wav">
     </audio>
+    <button id="startAudioButton">Start Audio</button>
     <p id="audio_status" style="color: green; font-weight: bold;">
-       Attempting to play audible audio...
+       Audio is not playing. Click "Start Audio" to begin.
     </p>
     <script>
-    var audioElem = document.getElementById("silentaudio");
+    var audioElem = document.getElementById("audibleAudio");
     var statusElem = document.getElementById("audio_status");
-
-    // If the audio actually starts playing, update status text:
-    audioElem.addEventListener("play", function() {{
-        statusElem.innerHTML = "Audible audio is now PLAYING.";
+    document.getElementById("startAudioButton").addEventListener("click", function() {{
+        audioElem.play().then(function() {{
+            statusElem.innerHTML = "Audible audio is now PLAYING.";
+            document.getElementById("startAudioButton").style.display = "none";
+        }}).catch(function(err) {{
+            statusElem.innerHTML = "ERROR playing audio: " + err;
+        }});
     }});
-
-    // If the audio is paused (e.g. blocked, or we manually stop it), update text:
+    
+    // Listen for pause event
     audioElem.addEventListener("pause", function() {{
         statusElem.innerHTML = "Audible audio is PAUSED.";
     }});
-
-    // Handle potential errors (like autoplay restrictions):
+    
+    // Listen for error event
     audioElem.addEventListener("error", function() {{
         statusElem.innerHTML = "ERROR playing audio.";
     }});
-
+    
     // A function we can call to stop the audio
     function stopAudio() {{
         if(audioElem) {{
@@ -697,7 +701,7 @@ def main():
         download_html = f"""
             <a href="data:application/zip;base64,{zip_b64}" 
                download="processed_cbz_files.zip" 
-               onclick="stopAudio();"  <!-- This calls our JS function to stop audio -->
+               onclick="stopAudio();"  
                style="font-size:1.2em; font-weight:bold; color:blue;">
                ► Download Processed CBZ Files (ZIP)
             </a>
