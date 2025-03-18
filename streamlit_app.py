@@ -578,7 +578,7 @@ def main():
         os.makedirs(output_folder)
 
     st.write("Upload multiple CBZ files (only for your session).")
-    uploaded_files = st.file_uploader("Upload CBZ Files", type=["cbz"], accept_multiple_files=True)
+
 
     # --- AUDIO PLAYBACK TO KEEP TAB ACTIVE ---
     # The following placeholders will handle audio playback and status.
@@ -586,13 +586,14 @@ def main():
     status_placeholder = st.empty()
 
     # Try to load and play the audio file.
-    try:
-        with open("1-hour-and-20-minutes-of-silence.mp3", "rb") as audio_file:
-            audio_bytes = audio_file.read()
-        audio_placeholder.audio(audio_bytes, format="audio/mp3")
-        status_placeholder.info("Audio is playing...")
-    except Exception as e:
-        status_placeholder.warning("Audio file not found.)
+    
+    with open("1-hour-and-20-minutes-of-silence.mp3", "rb") as audio_file:
+        audio_bytes = audio_file.read()
+    audio_placeholder.audio(audio_bytes, format="audio/mp3")
+    status_placeholder.info("Audio is playing...")
+
+    
+    uploaded_files = st.file_uploader("Upload CBZ Files", type=["cbz"], accept_multiple_files=True)
 
     if uploaded_files:
 
