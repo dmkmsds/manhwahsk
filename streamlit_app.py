@@ -571,13 +571,13 @@ def main():
     st.title("Batch CBZ Translator with Connected-Component Coloring")
 
     # --------------------------------------------------------------------
-    # 1) Inject a short audible audio track that loops in the background,
+    # 1) Inject an audible audio track that loops in the background,
     #    plus a status indicator that updates on play/pause/error.
     # --------------------------------------------------------------------
-    # Changed from a silent, muted audio to an audible beep sound.
     audible_audio_url = "https://www.soundjay.com/button/beep-07.wav"
+    # The audio element is now visible with controls, so the user can hear it.
     audio_html = f"""
-    <audio id="silentaudio" autoplay loop style="display:none;">
+    <audio id="silentaudio" autoplay loop controls>
         <source src="{audible_audio_url}" type="audio/wav">
     </audio>
     <p id="audio_status" style="color: green; font-weight: bold;">
