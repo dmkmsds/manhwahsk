@@ -643,6 +643,31 @@ def main():
 
         final_zip.seek(0)
 
+
+
+        # Trigger a browser notification using JavaScript.
+        st.markdown(
+            """
+            <script>
+            function notifyUser() {
+                if (!("Notification" in window)) {
+                    console.log("This browser does not support desktop notifications.");
+                } else if (Notification.permission === "granted") {
+                    new Notification("Processing complete!", { body: "Your final output is ready for download!" });
+                } else if (Notification.permission !== "denied") {
+                    Notification.requestPermission().then(function(permission) {
+                        if (permission === "granted") {
+                            new Notification("Processing complete!", { body: "Your final output is ready for download!" });
+                        }
+                    });
+                }
+            }
+            notifyUser();
+            </script>
+            """,
+            unsafe_allow_html=True
+        )
+
         # Place the download button in our placeholder *at the top*
         download_placeholder.download_button(
             label="Download Processed CBZ Files (ZIP)",
