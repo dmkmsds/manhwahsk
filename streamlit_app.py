@@ -199,8 +199,13 @@ def load_awesome_align_model():
 def awesome_align(english_text, chinese_text):
     """
     Returns a string representation of the aggregated alignments,
-    plus a Python set/list of (src_index, tgt_index, probability).
+    plus a Python list of (src_index, tgt_index, probability).
     """
+    # DEBUG prints inside awesome_align
+    st.write("**DEBUG**: Inside awesome_align =>")
+    st.write("english_text:", english_text)
+    st.write("chinese_text:", chinese_text)
+
     align_layer = 8
     th = 1e-3
 
@@ -268,7 +273,7 @@ def translate_to_segments(english_text):
        - Filter out tokens with Korean, translate leftover, run Awesome-Align.
        - Color-code aligned tokens (English, Chinese, pinyin).
     3) Return:
-       (all_seg_eng, all_seg_mand, all_seg_pin), combined_align_str, combined_cn_text, alignment_info (list of all alignments).
+       (all_seg_eng, all_seg_mand, all_seg_pin), combined_align_str, combined_cn_text, alignment_info.
     """
     sentence_list = split_into_sentences(english_text)
 
@@ -289,11 +294,18 @@ def translate_to_segments(english_text):
         if is_all_korean(sent):
             continue
 
+        # Filter out tokens that contain Korean
         filtered_text = filter_korean(sent)
         if not filtered_text.strip():
             continue
 
         cn_text = translate_text(filtered_text)
+
+        # DEBUG print before calling awesome_align
+        st.write("**DEBUG**: Will call awesome_align with:")
+        st.write("English text:", filtered_text)
+        st.write("Chinese text:", cn_text)
+
         mapping_str, align_list = awesome_align(filtered_text, cn_text)
 
         # Collect alignment info
@@ -637,8 +649,6 @@ def main():
                         st.write("**Original OCR Text:**")
                         st.write(data["original_text"])
                     
-                        
-
                         st.write("**Chinese (segmented):**")
                         seg_chinese_str = " ".join([tok[0] for tok in data["seg_mand"]])
                         st.write(seg_chinese_str)
@@ -648,7 +658,6 @@ def main():
                         st.write(seg_pinyin_str)
 
                         st.write("**Word Alignments (English -> Chinese):**")
-                        # data["alignment_info"] is a list of (src_i, tgt_j, prob)
                         seg_eng = data["seg_eng"]
                         seg_mand = data["seg_mand"]
                         for (src_i, tgt_j, prob) in data["alignment_info"]:
