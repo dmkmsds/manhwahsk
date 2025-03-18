@@ -118,7 +118,6 @@ def wrap_tokens(tokens, font, max_width):
     for token_text, token_color in tokens:
         token_width, _ = get_text_size(token_text, font)
         if current_line:
-            # If adding another token + space would exceed the max_width, start new line
             if current_width + space_width + token_width > max_width:
                 lines.append(current_line)
                 current_line = [(token_text, token_color)]
@@ -190,7 +189,7 @@ def load_awesome_align_model():
     tokenizer = AutoTokenizer.from_pretrained("aneuraz/awesome-align-with-co")
     return model, tokenizer
 
-def awesome_align_connected(english_text, chinese_text, threshold=0.6, align_layer=8):
+def awesome_align_connected(english_text, chinese_text, threshold=0.7, align_layer=8):
     """
     Use Awesome-Align to build a bipartite graph (word-level) above a threshold,
     then find connected components. Each connected component gets a unique color.
@@ -401,7 +400,7 @@ def merge_boxes_and_text(boxA, boxB, textA, textB):
         max(Amaxx, Bmaxx), max(Amaxy, Bmaxy)
     )
     merged_text = textA + " " + textB
-    return merged_box, merged_text
+    return merged_box, textB
 
 def group_annotations(annotations):
     """
@@ -621,7 +620,7 @@ def main():
 
                     # -- Display in Streamlit (so you can see without downloading) --
                     st.subheader(f"Processed Image: {os.path.basename(img_path)}")
-                    st.image(final_img, caption=os.path.basename(img_path), use_column_width=True)
+                    st.image(final_img, caption=os.path.basename(img_path), use_container_width=True)
 
                     # Show the alignment info:
                     for (orig_text, (seg_eng, seg_mand, seg_pin), align_str, cn_text) in text_triplets:
