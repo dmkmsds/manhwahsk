@@ -293,11 +293,15 @@ def translate_to_segments(english_text):
             st.write("Error parsing mapping_str:", e)
             mapping_pairs = []
 
+        # Modified color mapping part: apply threshold of 0.6
+        threshold = 0.6
         mapping_dict = {}
         reverse_mapping = {}
-        for i, j, _ in mapping_pairs:
-            mapping_dict.setdefault(i, set()).add(j)
-            reverse_mapping.setdefault(j, set()).add(i)
+        for i, j, prob in mapping_pairs:
+            if prob >= threshold:
+                mapping_dict.setdefault(i, set()).add(j)
+                reverse_mapping.setdefault(j, set()).add(i)
+
 
         # Tokenize English and Chinese
         sent_src = filtered_text.strip().split()
