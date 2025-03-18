@@ -178,7 +178,7 @@ def detect_text_boxes(image_path):
     response = vision_client.text_detection(image=image)
     if not response.text_annotations:
         return []
-    # text_annotations[0] is entire text, skip that
+    # text_annotations[0] is the entire recognized text, skip that
     return response.text_annotations[1:]
 
 # ------------------ AWESOME-ALIGN MODEL ------------------
@@ -189,6 +189,10 @@ def load_awesome_align_model():
     return model, tokenizer
 
 def awesome_align(english_text, chinese_text):
+    """
+    Returns a string representation of the aggregated alignments,
+    plus a Python set/list of (src_index, tgt_index, probability).
+    """
     align_layer = 8
     th = 1e-3
 
@@ -237,10 +241,15 @@ def awesome_align(english_text, chinese_text):
         key = (sub2word_map_src[i_idx], sub2word_map_tgt[j_idx])
         align_dict.setdefault(key, []).append(prob)
 
-    aggregated_alignments = {
-        (k[0], k[1], sum(v)/len(v)) for k, v in align_dict.items()
-    }
-    return str(aggregated_alignments)
+    # Average probability for each (src_word_idx, tgt_word_idx)
+    aggregated_alignments = []
+    for k, v in align_dict.items():
+        avg_prob = sum(v)/len(v)
+        aggregated_alignments.append((k[0], k[1], avg_prob))
+
+    # Convert to a set for the string representation
+    alignment_str_set = {(a[0], a[1], a[2]) for a in aggregated_alignments}
+    return str(alignment_str_set), aggregated_alignments
 
 # ------------------ MULTI-SENTENCE TRANSLATION & SEGMENTS ------------------
 def translate_to_segments(english_text):
@@ -250,14 +259,11 @@ def translate_to_segments(english_text):
        - If it's all Korean, skip.
        - Filter out tokens with Korean, translate leftover, run Awesome-Align.
        - Color-code aligned tokens (English, Chinese, pinyin).
-    3) Concatenate the sentence-level tokens into a single set.
-       Return (segmented_eng, segmented_mand, segmented_pin), combined alignment placeholder, combined Chinese text.
+    3) Return:
+       (all_seg_eng, all_seg_mand, all_seg_pin), combined_align_str, combined_cn_text, alignment_info (list of all alignments).
     """
-
-    # Break up into naive sentences
     sentence_list = split_into_sentences(english_text)
 
-    # We'll accumulate tokens for all sentences
     all_seg_eng = []
     all_seg_mand = []
     all_seg_pin = []
@@ -266,46 +272,38 @@ def translate_to_segments(english_text):
         "blue", "green", "orange", "purple", "brown",
         "cyan", "magenta", "olive", "teal", "navy"
     ]
-    color_idx = 0  # which color in the palette to use next
+    color_idx = 0
+
+    # We'll accumulate alignment info across sentences
+    all_alignment_info = []
 
     for sent in sentence_list:
-        # If it's purely Korean, skip alignment
         if is_all_korean(sent):
             continue
 
-        # Filter out tokens that contain ANY Korean
         filtered_text = filter_korean(sent)
         if not filtered_text.strip():
             continue
 
-        # Translate leftover text to Chinese
         cn_text = translate_text(filtered_text)
+        mapping_str, align_list = awesome_align(filtered_text, cn_text)
 
-        # Run Awesome-Align
-        mapping_str = awesome_align(filtered_text, cn_text)
-        st.write("Awesome-Align mapping (per sentence):", mapping_str)
-
-        # Parse the alignment string
-        try:
-            mapping_set = eval(mapping_str)
-            mapping_pairs = [tup for tup in mapping_set if len(tup) == 3]
-        except Exception as e:
-            st.write("Error parsing mapping_str:", e)
-            mapping_pairs = []
-
-        mapping_dict = {}
-        reverse_mapping = {}
-        for i, j, _ in mapping_pairs:
-            mapping_dict.setdefault(i, set()).add(j)
-            reverse_mapping.setdefault(j, set()).add(i)
+        # Collect alignment info
+        all_alignment_info.extend(align_list)
 
         # Tokenize English and Chinese
         sent_src = filtered_text.strip().split()
         sent_tgt = list(jieba.cut(cn_text))
 
-        # Assign colors within this sentence
+        # Prepare color mappings
+        mapping_dict = {}
+        reverse_mapping = {}
+        for (src_idx, tgt_idx, _) in align_list:
+            mapping_dict.setdefault(src_idx, set()).add(tgt_idx)
+            reverse_mapping.setdefault(tgt_idx, set()).add(src_idx)
+
         color_mapping = {}
-        for i, word in enumerate(sent_src):
+        for i, _ in enumerate(sent_src):
             if i in mapping_dict and color_idx < len(normal_palette):
                 color_mapping[i] = normal_palette[color_idx]
                 color_idx = (color_idx + 1) % len(normal_palette)
@@ -313,7 +311,7 @@ def translate_to_segments(english_text):
                 color_mapping[i] = "black"
 
         target_color_mapping = {}
-        for j, word in enumerate(sent_tgt):
+        for j, _ in enumerate(sent_tgt):
             if j in reverse_mapping:
                 # pick any aligned source index
                 source_index = list(reverse_mapping[j])[0]
@@ -328,28 +326,23 @@ def translate_to_segments(english_text):
             for j, word in enumerate(sent_tgt)
         ]
 
-        # Add space tokens between sentence chunks (optional)
+        # Add space between sentences
         if all_seg_eng:
             all_seg_eng.append((" ", "black"))
             all_seg_mand.append((" ", "black"))
             all_seg_pin.append((" ", "black"))
 
-        # Append tokens for this sentence
         all_seg_eng.extend(seg_eng)
         all_seg_mand.extend(seg_mand)
         all_seg_pin.extend(seg_pin)
 
-    # If we never got any tokens, it means the entire text was Korean or filtered out
     if not all_seg_eng:
-        return None, "", english_text
+        # Means everything was Korean or empty
+        return None, "", english_text, []
 
-    # Combine final Chinese text for display (just concatenates the Chinese tokens)
     combined_chinese = " ".join([tok[0] for tok in all_seg_mand])
-    # We won't store a real alignment string for the entire multi-sentence text, 
-    # but we can put a placeholder
     mapping_str = "<multi-sentence alignment>"
-
-    return (all_seg_eng, all_seg_mand, all_seg_pin), mapping_str, combined_chinese
+    return (all_seg_eng, all_seg_mand, all_seg_pin), mapping_str, combined_chinese, all_alignment_info
 
 # ------------------ MERGING LOGIC ------------------
 def bbox_for_annotation(ann):
@@ -359,9 +352,6 @@ def bbox_for_annotation(ann):
     return min(xs), min(ys), max(xs), max(ys)
 
 def overlap_or_close(boxA, boxB, threshold=MERGE_THRESHOLD):
-    """
-    Merge logic uses a small threshold to see if they should combine as one text region.
-    """
     Aminx, Aminy, Amaxx, Amaxy = boxA
     Bminx, Bminy, Bmaxx, Bmaxy = boxB
     if Amaxx < Bminx - threshold or Bmaxx < Aminx - threshold:
@@ -408,11 +398,8 @@ def group_annotations(annotations):
         items = new_items
     return items
 
-# ------------------ HELPER: BOX OVERLAP WITHOUT THRESHOLD ------------------
+# ------------------ BOX OVERLAP (ZERO THRESHOLD) ------------------
 def boxes_overlap(boxA, boxB):
-    """
-    Simple bounding-box overlap check with zero threshold.
-    """
     Aminx, Aminy, Amaxx, Amaxy = boxA
     Bminx, Bminy, Bmaxx, Bmaxy = boxB
     if Amaxx < Bminx or Bmaxx < Aminx:
@@ -421,16 +408,13 @@ def boxes_overlap(boxA, boxB):
         return False
     return True
 
-# ------------------ HELPER: TRY EXPANDING A BOX ------------------
+# ------------------ EXPAND BOUNDING BOXES ------------------
 def try_expand_box(orig_box, other_boxes, img_width, img_height,
-                   expand_w_factor=0.2, expand_h_factor=0.35,  # <-- CHANGED HERE
+                   expand_w_factor=0.2, expand_h_factor=0.35,
                    margin=5, extra_padding=10):
     """
-    Attempt to expand `orig_box` by 20% in width, *35%* in height
-    (was 25% originally), plus existing margin/padding.
-    If expansion causes overlap with any box in `other_boxes`, revert to original.
-
-    Returns the final (min_x, min_y, max_x, max_y).
+    Attempt to expand `orig_box` by certain width/height factors.
+    Revert if it overlaps another box after expansion.
     """
     (min_x, min_y, max_x, max_y) = orig_box
 
@@ -442,26 +426,20 @@ def try_expand_box(orig_box, other_boxes, img_width, img_height,
 
     orig_expanded = (min_x, min_y, max_x, max_y)
 
-    # Now compute the expand_w_factor & expand_h_factor expansions around the center
+    # Now compute the factor expansions around the center
     width = max_x - min_x
     height = max_y - min_y
     expand_w = width * expand_w_factor
     expand_h = height * expand_h_factor
 
-    new_min_x = min_x - expand_w / 2
-    new_max_x = max_x + expand_w / 2
-    new_min_y = min_y - expand_h / 2
-    new_max_y = max_y + expand_h / 2
-
-    # Clamp to image boundaries
-    new_min_x = max(0, new_min_x)
-    new_min_y = max(0, new_min_y)
-    new_max_x = min(img_width, new_max_x)
-    new_max_y = min(img_height, new_max_y)
+    new_min_x = max(0, min_x - expand_w / 2)
+    new_max_x = min(img_width, max_x + expand_w / 2)
+    new_min_y = max(0, min_y - expand_h / 2)
+    new_max_y = min(img_height, max_y + expand_h / 2)
 
     expanded_box = (new_min_x, new_min_y, new_max_x, new_max_y)
 
-    # Check overlap with others (excluding the original box itself).
+    # Check overlap with other boxes
     for other in other_boxes:
         if other is None:
             continue
@@ -474,25 +452,10 @@ def try_expand_box(orig_box, other_boxes, img_width, img_height,
 
     return expanded_box
 
-# ------------------ OVERLAY ------------------
-def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN):
+def expand_boxes(items, img_width, img_height):
     """
-    For each annotation box, we do:
-      1) Attempt to expand the bounding box by 20% width, 35% height 
-         (unless it overlaps).
-      2) If text is all Korean, skip overlay.
-      3) Otherwise, translate & overlay pinyin on top, separator, then English.
+    Expand each bounding box if possible. Store in item["final_bbox"].
     """
-    EXTRA_PADDING = 10
-    SEPARATOR_PADDING = 10
-    initial_font_size = 22
-    min_font_size = 14
-
-    img = Image.open(image_path).convert("RGBA")
-    draw = ImageDraw.Draw(img)
-    text_triplets = []
-
-    # === First pass: expand each bounding box if possible ===
     for item in items:
         item["final_bbox"] = None
 
@@ -501,26 +464,68 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
         expanded_box = try_expand_box(
             orig_box,
             other_boxes=[it for it in items if it is not item],
-            img_width=img.width,
-            img_height=img.height,
+            img_width=img_width,
+            img_height=img_height,
             expand_w_factor=0.2,
-            expand_h_factor=0.35,  # vertical expansion increased
-            margin=margin,
-            extra_padding=EXTRA_PADDING
+            expand_h_factor=0.35,
+            margin=MARGIN,
+            extra_padding=10
         )
         item["final_bbox"] = expanded_box
+    return items
 
-    # === Second pass: do the actual overlay with the final bounding box. ===
+# ------------------ DRAW PREVIEW BOXES (ORIGINAL IMAGE + RED BOX) ------------------
+def draw_preview_boxes(image_path, items):
+    """
+    Returns a new image (RGBA) with only red outline boxes
+    around item["final_bbox"] (no fill).
+    """
+    img = Image.open(image_path).convert("RGBA")
+    draw = ImageDraw.Draw(img)
+    for item in items:
+        (min_x, min_y, max_x, max_y) = item["final_bbox"]
+        draw.rectangle([(min_x, min_y), (max_x, max_y)],
+                       outline=(255, 0, 0, 255), width=3)
+    return img
+
+# ------------------ OVERLAY TRANSLATION/PINYIN ------------------
+def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN):
+    """
+    Draws white rectangles on final_bbox, then overlays pinyin+English.
+    Returns final PIL image, plus a list of dictionaries with detailed info.
+    """
+    EXTRA_PADDING = 10
+    SEPARATOR_PADDING = 10
+    initial_font_size = 22
+    min_font_size = 14
+
+    img = Image.open(image_path).convert("RGBA")
+    draw = ImageDraw.Draw(img)
+
+    # We'll accumulate info about each text region for display
+    text_triplets = []
+
     for item in items:
         (min_x, min_y, max_x, max_y) = item["final_bbox"]
         original_text = item["text"].strip()
 
-        seg_result, mapping_str, translated_text = translate_to_segments(original_text)
+        seg_result, mapping_str, translated_text, alignment_info = translate_to_segments(original_text)
         if seg_result is None:
-            continue  # all-Korean or empty after filtering
+            # all-Korean or empty
+            continue
 
         seg_eng, seg_mand, seg_pin = seg_result
-        text_triplets.append((original_text, (seg_eng, seg_mand, seg_pin), mapping_str, translated_text))
+
+        # Store the info for later output
+        text_triplets.append({
+            "original_text": original_text,
+            "seg_eng": seg_eng,
+            "seg_mand": seg_mand,
+            "seg_pin": seg_pin,
+            "mapping_str": mapping_str,
+            "translated_text": translated_text,
+            "alignment_info": alignment_info
+        })
 
         # Draw a white rectangle + red outline
         draw.rectangle([(min_x, min_y), (max_x, max_y)], fill=(255,255,255,255))
@@ -546,21 +551,20 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
             else:
                 break
 
-        # Draw text
+        # Draw the text
         start_y_text = min_y + (box_height - total_text_height) / 2
         start_y_text = draw_wrapped_lines(draw, pinyin_lines, font, min_x, start_y_text, box_width)
-
         start_y_text += SEPARATOR_PADDING
+        # optional horizontal line
         draw.line([(min_x, start_y_text), (min_x + box_width, start_y_text)], fill="black", width=1)
         start_y_text += 1
-
         draw_wrapped_lines(draw, english_lines, font, min_x, start_y_text, box_width)
 
     return img.convert("RGB"), text_triplets
 
 # ------------------ STREAMLIT APP ------------------
 def main():
-    st.title("Batch CBZ Translator with Box Expansion")
+    st.title("Batch CBZ Translator with Box Expansion & Word Align Preview")
 
     # Create a placeholder at the top for a download button (we'll fill it later)
     download_placeholder = st.empty()
@@ -601,11 +605,49 @@ def main():
                 annotations = detect_text_boxes(img_path)
                 if annotations:
                     merged_items = group_annotations(annotations)
-                    final_img, _ = overlay_merged_pinyin(
+                    # Expand bounding boxes
+                    merged_items = expand_boxes(merged_items, Image.open(img_path).width, Image.open(img_path).height)
+
+                    # Show a preview of the bounding boxes on the original image
+                    preview_img = draw_preview_boxes(img_path, merged_items)
+                    st.image(preview_img, caption=f"Bounding Box Preview: {os.path.basename(img_path)}")
+
+                    # Now do the overlay
+                    final_img, text_triplets = overlay_merged_pinyin(
                         img_path, merged_items,
                         font_path=FONT_PATH,
                         margin=MARGIN
                     )
+
+                    # Display the final image with overlay
+                    st.image(final_img, caption=f"Final Overlay: {os.path.basename(img_path)}")
+
+                    # Print out the recognized text, pinyin, and word mapping
+                    for block_idx, data in enumerate(text_triplets, start=1):
+                        st.write("---")
+                        st.write(f"**Text Block {block_idx}:**")
+                        st.write("**Original OCR Text:**")
+                        st.write(data["original_text"])
+
+                        st.write("**Chinese (segmented):**")
+                        seg_chinese_str = " ".join([tok[0] for tok in data["seg_mand"]])
+                        st.write(seg_chinese_str)
+
+                        st.write("**Pinyin (segmented):**")
+                        seg_pinyin_str = " ".join([tok[0] for tok in data["seg_pin"]])
+                        st.write(seg_pinyin_str)
+
+                        st.write("**Word Alignments (English -> Chinese):**")
+                        # data["alignment_info"] is a list of (src_i, tgt_j, prob)
+                        seg_eng = data["seg_eng"]
+                        seg_mand = data["seg_mand"]
+                        for (src_i, tgt_j, prob) in data["alignment_info"]:
+                            if src_i < len(seg_eng) and tgt_j < len(seg_mand):
+                                eng_word = seg_eng[src_i][0]
+                                cn_word = seg_mand[tgt_j][0]
+                                st.write(f" - {eng_word} -> {cn_word} (prob={prob:.3f})")
+
+                    # Finally, overwrite the original image on disk with the final overlay
                     final_img.save(img_path)
 
             # Repack to CBZ
@@ -613,7 +655,7 @@ def main():
             repack_to_cbz(temp_extract_folder, output_cbz_path)
             processed_cbz_paths.append(output_cbz_path)
 
-            # Cleanup
+            # Cleanup the extracted folder
             shutil.rmtree(temp_extract_folder)
             progress_bar.progress(idx / total_files)
 
