@@ -619,11 +619,6 @@ def debug_print_ocr_details(image_path, orig_img=None):
       - Display the original (before) image with red boxes drawn around the detected OCR regions.
       - Display the processed (after) image with overlayed translations and pinyin.
       - Print out the extracted OCR text, the generated pinyin, and the word mapping from Awesome-Align.
-      
-    Parameters:
-      image_path: The path to the image file.
-      orig_img: (Optional) A PIL Image object representing the original image before processing.
-                If None, the function will load the image from image_path.
     """
     from PIL import Image, ImageDraw
     import streamlit as st
@@ -644,15 +639,21 @@ def debug_print_ocr_details(image_path, orig_img=None):
         st.write("No OCR annotations detected in the image.")
         return
     
+    # Because detect_text_boxes() now returns a dict with "bbox" and "text":
     for ann in annotations:
-        bbox = bbox_for_annotation(ann)
-        draw_before.rectangle([(bbox[0], bbox[1]), (bbox[2], bbox[3])], outline="red", width=2)
+        bbox = ann["bbox"]  # <--- direct dictionary access
+        draw_before.rectangle([(bbox[0], bbox[1]), (bbox[2], bbox[3])],
+                              outline="red", width=2)
     
     # Merge annotations to group overlapping OCR text regions.
     merged_items = group_annotations(annotations)
     
     # Process the image to get the final overlay image and debug information.
-    after_img, text_triplets = overlay_merged_pinyin(image_path, merged_items, font_path=FONT_PATH, margin=MARGIN)
+    after_img, text_triplets = overlay_merged_pinyin(
+        image_path, merged_items,
+        font_path=FONT_PATH,
+        margin=MARGIN
+    )
     
     # Display the before and after images using Streamlit.
     st.write("**Before Image (Original with red OCR boxes):**")
