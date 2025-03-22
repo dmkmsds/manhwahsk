@@ -152,6 +152,41 @@ def draw_wrapped_lines(draw, lines, font, start_x, start_y, max_width):
         start_y += line_height
     return start_y
 
+
+
+def detect_paragraphs(image_path):
+    with open(image_path, "rb") as img_file:
+        content = img_file.read()
+    image = vision.Image(content=content)
+    response = vision_client.document_text_detection(image=image)
+    annotation = response.full_text_annotation
+
+    if not annotation or not annotation.pages:
+        return []
+
+    paragraphs = []
+    for page in annotation.pages:
+        for block in page.blocks:
+            for paragraph in block.paragraphs:
+                # Reconstruct paragraph text by concatenating word symbols
+                paragraph_words = []
+                for word in paragraph.words:
+                    word_text = "".join(symbol.text for symbol in word.symbols)
+                    paragraph_words.append(word_text)
+                paragraph_text = " ".join(paragraph_words)
+
+                # Convert the paragraph's bounding_poly vertices into a simple box
+                vertices = [(v.x, v.y) for v in paragraph.bounding_box.vertices]
+                xs, ys = zip(*vertices)
+                bbox = (min(xs), min(ys), max(xs), max(ys))
+
+                paragraphs.append({
+                    "bbox": bbox,
+                    "text": paragraph_text
+                })
+    return paragraphs
+
+
 # ------------------ CBZ HANDLING ------------------
 def extract_cbz(cbz_path, output_folder):
     with zipfile.ZipFile(cbz_path, 'r') as zip_ref:
@@ -630,20 +665,10 @@ def debug_print_ocr_details(image_path, orig_img=None):
     draw_before = ImageDraw.Draw(before_img)
     
     # Get OCR annotations from the original image.
-    annotations = detect_text_boxes(image_path)
-    if not annotations:
-        st.write("No OCR annotations detected in the image.")
-        return
-    
-    for ann in annotations:
-        bbox = bbox_for_annotation(ann)
-        draw_before.rectangle([(bbox[0], bbox[1]), (bbox[2], bbox[3])], outline="red", width=2)
-    
-    # Merge annotations to group overlapping OCR text regions.
-    merged_items = group_annotations(annotations)
+    paragraph_items = detect_paragraphs(image_path)
     
     # Process the image to get the final overlay image and debug information.
-    after_img, text_triplets = overlay_merged_pinyin(image_path, merged_items, font_path=FONT_PATH, margin=MARGIN)
+    after_img, text_triplets = overlay_merged_pinyin(image_path, paragraph_items, font_path=FONT_PATH, margin=MARGIN)
     
     # Display the before and after images using Streamlit.
     st.write("**Before Image (Original with red OCR boxes):**")
@@ -724,11 +749,10 @@ def main():
                 debug_print_ocr_details(img_path, orig_img=original_image)
                 
                 # Then continue with your processing.
-                annotations = detect_text_boxes(img_path)
-                if annotations:
-                    merged_items = group_annotations(annotations)
+                paragraph_items = detect_paragraphs(img_path)
+                if paragraph_items:
                     final_img, _ = overlay_merged_pinyin(
-                        img_path, merged_items,
+                        img_path, paragraph_items,
                         font_path=FONT_PATH,
                         margin=MARGIN
                     )
