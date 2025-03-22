@@ -171,15 +171,43 @@ def repack_to_cbz(folder_path, output_cbz_path):
                 zf.write(full_path, arcname=rel_path)
 
 # ------------------ VISION TEXT DETECTION ------------------
+def bbox_for_annotation(ann):
+    vs = ann.bounding_poly.vertices
+    xs = [v.x for v in vs]
+    ys = [v.y for v in vs]
+    return min(xs), min(ys), max(xs), max(ys)
+
 def detect_text_boxes(image_path):
+    """
+    Approach A: Use text_annotations[0], which is the entire recognized text in reading order.
+    Return one bounding box containing the full text, ignoring smaller boxes for each word.
+    """
     with open(image_path, "rb") as img_file:
         content = img_file.read()
     image = vision.Image(content=content)
     response = vision_client.text_detection(image=image)
     if not response.text_annotations:
         return []
-    # text_annotations[0] is entire text, skip that
-    return response.text_annotations[1:]
+    
+    # text_annotations[0] is the entire recognized text (all lines in reading order).
+    full_text = response.text_annotations[0].description
+    full_box = bbox_for_annotation(response.text_annotations[0])
+    
+    # Return a single annotation item with the entire text and bounding box.
+    return [{"bbox": full_box, "text": full_text}]
+
+# ------------------ REMOVE HYPHENATION ------------------
+def remove_hyphenation(text):
+    """
+    Attempt to fix common hyphenation issues from OCR, e.g.:
+      "IMPOR- TANT" => "IMPORTANT"
+      "INFOR- MATION." => "INFORMATION."
+    """
+    text = text.replace("\n", " ")
+    text = text.replace("—", "-").replace("–", "-")
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"(\S+)-\s+(\S+)", r"\1\2", text)
+    return text
 
 # ------------------ AWESOME-ALIGN MODEL ------------------
 @st.cache_resource
@@ -253,23 +281,20 @@ def translate_to_segments(english_text):
     3) Concatenate the sentence-level tokens into a single set.
        Return (segmented_eng, segmented_mand, segmented_pin), combined alignment placeholder, combined Chinese text.
     """
+    english_text = remove_hyphenation(english_text)
 
     # Break up into naive sentences
     sentence_list = split_into_sentences(english_text)
 
-    # We'll accumulate tokens for all sentences
     all_seg_eng = []
     all_seg_mand = []
     all_seg_pin = []
 
-    normal_palette = [
-        "blue", "green", "orange", "purple", "brown",
-        "cyan", "magenta", "olive", "teal", "navy"
-    ]
-    color_idx = 0  # which color in the palette to use next
+    normal_palette = ["blue","green","orange","purple","brown","cyan","magenta","olive","teal","navy"]
+    color_idx = 0
 
     for sent in sentence_list:
-        # If it's purely Korean, skip alignment
+        # If it's purely Korean, skip
         if is_all_korean(sent):
             continue
 
@@ -278,14 +303,13 @@ def translate_to_segments(english_text):
         if not filtered_text.strip():
             continue
 
-        # Translate leftover text to Chinese
+        # Translate leftover text -> Chinese
         cn_text = translate_text(filtered_text)
 
         # Run Awesome-Align
         mapping_str = awesome_align(filtered_text, cn_text)
         st.write("Awesome-Align mapping (per sentence):", mapping_str)
 
-        # Parse the alignment string
         try:
             mapping_set = eval(mapping_str)
             mapping_pairs = [tup for tup in mapping_set if len(tup) == 3]
@@ -299,232 +323,51 @@ def translate_to_segments(english_text):
             mapping_dict.setdefault(i, set()).add(j)
             reverse_mapping.setdefault(j, set()).add(i)
 
-        # Tokenize English and Chinese
         sent_src = filtered_text.strip().split()
         sent_tgt = list(jieba.cut(cn_text))
 
-        # Assign colors within this sentence
+        # Assign colors
         color_mapping = {}
         for i, word in enumerate(sent_src):
             if i in mapping_dict and color_idx < len(normal_palette):
                 color_mapping[i] = normal_palette[color_idx]
-                color_idx = (color_idx + 1) % len(normal_palette)
+                color_idx = (color_idx+1)%len(normal_palette)
             else:
                 color_mapping[i] = "black"
 
         target_color_mapping = {}
         for j, word in enumerate(sent_tgt):
             if j in reverse_mapping:
-                # pick any aligned source index
-                source_index = list(reverse_mapping[j])[0]
-                target_color_mapping[j] = color_mapping.get(source_index, "black")
+                src_index = list(reverse_mapping[j])[0]
+                target_color_mapping[j] = color_mapping.get(src_index, "black")
             else:
                 target_color_mapping[j] = "black"
 
-        seg_eng = [(word, color_mapping.get(i, "black")) for i, word in enumerate(sent_src)]
-        seg_mand = [(word, target_color_mapping.get(j, "black")) for j, word in enumerate(sent_tgt)]
-        seg_pin = [
-            (" ".join(lazy_pinyin(word, style=Style.TONE)), target_color_mapping.get(j, "black"))
-            for j, word in enumerate(sent_tgt)
-        ]
+        seg_eng = [(word, color_mapping.get(i,"black")) for i, word in enumerate(sent_src)]
+        seg_mand= [(word, target_color_mapping.get(j,"black")) for j, word in enumerate(sent_tgt)]
+        seg_pin = [(" ".join(lazy_pinyin(word, style=Style.TONE)), target_color_mapping.get(j,"black")) for j, word in enumerate(sent_tgt)]
 
-        # Add space tokens between sentence chunks (optional)
         if all_seg_eng:
             all_seg_eng.append((" ", "black"))
             all_seg_mand.append((" ", "black"))
             all_seg_pin.append((" ", "black"))
 
-        # Append tokens for this sentence
         all_seg_eng.extend(seg_eng)
         all_seg_mand.extend(seg_mand)
         all_seg_pin.extend(seg_pin)
 
-    # If we never got any tokens, it means the entire text was Korean or filtered out
     if not all_seg_eng:
         return None, "", english_text
 
-    # Combine final Chinese text for display (just concatenates the Chinese tokens)
     combined_chinese = " ".join([tok[0] for tok in all_seg_mand])
-    # We won't store a real alignment string for the entire multi-sentence text, 
-    # but we can put a placeholder
     mapping_str = "<multi-sentence alignment>"
-
     return (all_seg_eng, all_seg_mand, all_seg_pin), mapping_str, combined_chinese
 
-# ------------------ MERGING LOGIC ------------------
-def bbox_for_annotation(ann):
-    vs = ann.bounding_poly.vertices
-    xs = [v.x for v in vs]
-    ys = [v.y for v in vs]
-    return min(xs), min(ys), max(xs), max(ys)
-
-def overlap_or_close(boxA, boxB, threshold=MERGE_THRESHOLD):
+# ------------------ OVERLAY SINGLE-BOX ------------------
+def overlay_merged_pinyin(image_path, single_item, font_path=FONT_PATH, margin=MARGIN):
     """
-    Merge logic uses a small threshold to see if they should combine as one text region.
-    """
-    Aminx, Aminy, Amaxx, Amaxy = boxA
-    Bminx, Bminy, Bmaxx, Bmaxy = boxB
-    if Amaxx < Bminx - threshold or Bmaxx < Aminx - threshold:
-        return False
-    if Amaxy < Bminy - threshold or Bmaxy < Aminy - threshold:
-        return False
-    return True
-
-def merge_boxes_and_text(boxA, boxB, textA, textB):
-    Aminx, Aminy, Amaxx, Amaxy = boxA
-    Bminx, Bminy, Bmaxx, Bmaxy = boxB
-    merged_box = (
-        min(Aminx, Bminx), min(Aminy, Bminy),
-        max(Amaxx, Bmaxx), max(Amaxy, Bmaxy)
-    )
-    merged_text = textA + " " + textB
-    return merged_box, merged_text
-
-def remove_hyphenation(text):
-    """
-    Attempt to fix common hyphenation issues from OCR, e.g.:
-      "IMPOR- TANT" => "IMPORTANT"
-      "INFOR- MATION." => "INFORMATION."
-    """
-    # 1) Replace any newlines with a space
-    text = text.replace("\n", " ")
-    
-    # 2) Convert em dashes or en dashes to a normal dash
-    text = text.replace("—", "-").replace("–", "-")
-    
-    # 3) Collapse multiple spaces into one
-    text = re.sub(r"\s+", " ", text)
-    
-    # 4) Merge patterns like "word- word" => "wordword"
-    text = re.sub(r"(\S+)-\s+(\S+)", r"\1\2", text)
-    
-    return text
-
-
-
-def group_annotations(annotations):
-    """
-    Merges overlapping text boxes into single items with combined text.
-    Now sorts bounding boxes top-to-bottom, left-to-right before merging
-    so that final text is in a more natural reading order.
-    """
-    # 1. Convert each annotation into (bbox, text) but do NOT remove hyphenation yet.
-    items = []
-    for ann in annotations:
-        raw_text = ann.description
-        box = bbox_for_annotation(ann)
-        items.append({"bbox": box, "text": raw_text})
-    
-    # 2. Sort items by their top (min_y), then by left (min_x).
-    #    This should help preserve reading order when we merge text.
-    def sort_key(item):
-        x1, y1, x2, y2 = item["bbox"]
-        return (y1, x1)  # sort by top first, then left
-    items.sort(key=sort_key)
-    
-    # 3. Merge pass
-    merged = True
-    while merged:
-        merged = False
-        new_items = []
-        while items:
-            current = items.pop()
-            for idx, existing in enumerate(new_items):
-                if overlap_or_close(current["bbox"], existing["bbox"], threshold=MERGE_THRESHOLD):
-                    mb, mt = merge_boxes_and_text(
-                        current["bbox"], existing["bbox"],
-                        current["text"], existing["text"]
-                    )
-                    new_items[idx]["bbox"] = mb
-                    new_items[idx]["text"] = mt
-                    merged = True
-                    break
-            else:
-                new_items.append(current)
-        items = new_items
-
-    # 4. After merging is done, do final hyphenation cleanup on each merged text.
-    for it in items:
-        it["text"] = remove_hyphenation(it["text"])
-    
-    return items
-
-
-
-# ------------------ HELPER: BOX OVERLAP WITHOUT THRESHOLD ------------------
-def boxes_overlap(boxA, boxB):
-    """
-    Simple bounding-box overlap check with zero threshold.
-    """
-    Aminx, Aminy, Amaxx, Amaxy = boxA
-    Bminx, Bminy, Bmaxx, Bmaxy = boxB
-    if Amaxx < Bminx or Bmaxx < Aminx:
-        return False
-    if Amaxy < Bminy or Bmaxy < Aminy:
-        return False
-    return True
-
-# ------------------ HELPER: TRY EXPANDING A BOX ------------------
-def try_expand_box(orig_box, other_boxes, img_width, img_height,
-                   expand_w_factor=0.2, expand_h_factor=0.35,  # <-- CHANGED HERE
-                   margin=5, extra_padding=10):
-    """
-    Attempt to expand orig_box by 20% in width, *35%* in height
-    (was 25% originally), plus existing margin/padding.
-    If expansion causes overlap with any box in other_boxes, revert to original.
-
-    Returns the final (min_x, min_y, max_x, max_y).
-    """
-    (min_x, min_y, max_x, max_y) = orig_box
-
-    # Original expansions (margin + padding)
-    min_x = max(0, min_x - margin - extra_padding)
-    min_y = max(0, min_y - margin - extra_padding)
-    max_x = min(img_width, max_x + margin + extra_padding)
-    max_y = min(img_height, max_y + margin + extra_padding)
-
-    orig_expanded = (min_x, min_y, max_x, max_y)
-
-    # Now compute the expand_w_factor & expand_h_factor expansions around the center
-    width = max_x - min_x
-    height = max_y - min_y
-    expand_w = width * expand_w_factor
-    expand_h = height * expand_h_factor
-
-    new_min_x = min_x - expand_w / 2
-    new_max_x = max_x + expand_w / 2
-    new_min_y = min_y - expand_h / 2
-    new_max_y = max_y + expand_h / 2
-
-    # Clamp to image boundaries
-    new_min_x = max(0, new_min_x)
-    new_min_y = max(0, new_min_y)
-    new_max_x = min(img_width, new_max_x)
-    new_max_y = min(img_height, new_max_y)
-
-    expanded_box = (new_min_x, new_min_y, new_max_x, new_max_y)
-
-    # Check overlap with others (excluding the original box itself).
-    for other in other_boxes:
-        if other is None:
-            continue
-        if other["final_bbox"] is None:
-            continue
-        if other["final_bbox"] == orig_box:
-            continue
-        if boxes_overlap(expanded_box, other["final_bbox"]):
-            return orig_expanded
-
-    return expanded_box
-
-# ------------------ OVERLAY ------------------
-def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN):
-    """
-    For each annotation box, we do:
-      1) Attempt to expand the bounding box by 20% width, 35% height 
-         (unless it overlaps).
-      2) If text is all Korean, skip overlay.
-      3) Otherwise, translate & overlay pinyin on top, separator, then English.
+    We only have one item: { 'bbox': (x1,y1,x2,y2), 'text': ... } for the entire text.
+    We'll expand it, overlay pinyin & English, and return the final image.
     """
     EXTRA_PADDING = 10
     SEPARATOR_PADDING = 10
@@ -535,136 +378,116 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
     draw = ImageDraw.Draw(img)
     text_triplets = []
 
-    # === First pass: expand each bounding box if possible ===
-    for item in items:
-        item["final_bbox"] = None
+    # Expand the box if desired (only one box)
+    single_item["final_bbox"] = None
 
-    for i, item in enumerate(items):
-        orig_box = item["bbox"]
-        expanded_box = try_expand_box(
-            orig_box,
-            other_boxes=[it for it in items if it is not item],
-            img_width=img.width,
-            img_height=img.height,
-            expand_w_factor=0.2,
-            expand_h_factor=0.35,  # vertical expansion increased
-            margin=margin,
-            extra_padding=EXTRA_PADDING
-        )
-        item["final_bbox"] = expanded_box
+    orig_box = single_item["bbox"]
+    (W,H) = img.size
+    # Attempt expansion
+    new_bbox = try_expand_box(
+        orig_box,
+        other_boxes=[],  # no other boxes to worry about
+        img_width=W,
+        img_height=H,
+        expand_w_factor=0.2,
+        expand_h_factor=0.35,
+        margin=margin,
+        extra_padding=EXTRA_PADDING
+    )
+    single_item["final_bbox"] = new_bbox
 
-    # === Second pass: do the actual overlay with the final bounding box. ===
-    for item in items:
-        (min_x, min_y, max_x, max_y) = item["final_bbox"]
-        original_text = item["text"].strip()
+    (min_x, min_y, max_x, max_y) = new_bbox
+    original_text = single_item["text"].strip()
 
-        seg_result, mapping_str, translated_text = translate_to_segments(original_text)
-        if seg_result is None:
-            continue  # all-Korean or empty after filtering
+    seg_result, mapping_str, translated_text = translate_to_segments(original_text)
+    if seg_result is None:
+        # all-Korean or empty
+        return img.convert("RGB"), []
 
-        seg_eng, seg_mand, seg_pin = seg_result
-        text_triplets.append((original_text, (seg_eng, seg_mand, seg_pin), mapping_str, translated_text))
+    seg_eng, seg_mand, seg_pin = seg_result
+    text_triplets.append((original_text, (seg_eng, seg_mand, seg_pin), mapping_str, translated_text))
 
-        # Draw a white rectangle + red outline
-        draw.rectangle([(min_x, min_y), (max_x, max_y)], fill=(255,255,255,255))
-        draw.rectangle([(min_x, min_y), (max_x, max_y)], outline=(255,0,0,255), width=2)
+    # Draw a white rectangle + red outline
+    draw.rectangle([(min_x, min_y), (max_x, max_y)], fill=(255,255,255,255))
+    draw.rectangle([(min_x, min_y), (max_x, max_y)], outline=(255,0,0,255), width=2)
 
-        box_width = max_x - min_x
-        box_height = max_y - min_y
+    box_width  = max_x - min_x
+    box_height = max_y - min_y
 
-        # Find a font size that fits
-        font_size = initial_font_size
-        while True:
-            if os.path.exists(font_path):
-                font = ImageFont.truetype(font_path, font_size)
-            else:
-                font = ImageFont.load_default()
+    # Font sizing
+    font_size = initial_font_size
+    while True:
+        if os.path.exists(font_path):
+            font = ImageFont.truetype(font_path, font_size)
+        else:
+            font = ImageFont.load_default()
 
-            pinyin_lines, pinyin_height = wrap_tokens(seg_pin, font, box_width)
-            english_lines, english_height = wrap_tokens(seg_eng, font, box_width)
-            total_text_height = pinyin_height + english_height + SEPARATOR_PADDING
+        pinyin_lines, pinyin_height = wrap_tokens(seg_pin, font, box_width)
+        english_lines, english_height = wrap_tokens(seg_eng, font, box_width)
+        total_text_height = pinyin_height + english_height + SEPARATOR_PADDING
 
-            if total_text_height > box_height and font_size > min_font_size:
-                font_size -= 2
-            else:
-                break
+        if total_text_height > box_height and font_size > min_font_size:
+            font_size -= 2
+        else:
+            break
 
-        # Draw text
-        start_y_text = min_y + (box_height - total_text_height) / 2
-        start_y_text = draw_wrapped_lines(draw, pinyin_lines, font, min_x, start_y_text, box_width)
+    # Draw text
+    start_y_text = min_y + (box_height - total_text_height) / 2
+    start_y_text = draw_wrapped_lines(draw, pinyin_lines, font, min_x, start_y_text, box_width)
 
-        start_y_text += SEPARATOR_PADDING
-        draw.line([(min_x, start_y_text), (min_x + box_width, start_y_text)], fill="black", width=1)
-        start_y_text += 1
+    start_y_text += SEPARATOR_PADDING
+    draw.line([(min_x, start_y_text), (min_x + box_width, start_y_text)], fill="black", width=1)
+    start_y_text += 1
 
-        draw_wrapped_lines(draw, english_lines, font, min_x, start_y_text, box_width)
+    draw_wrapped_lines(draw, english_lines, font, min_x, start_y_text, box_width)
 
     return img.convert("RGB"), text_triplets
 
-
-
-
-def debug_print_ocr_details(image_path, orig_img=None):
+# ------------------ DEBUG PRINT ------------------
+def debug_print_ocr_details(image_path):
     """
     Debug function to:
-      - Display the original (before) image with red boxes drawn around the detected OCR regions.
-      - Display the processed (after) image with overlayed translations and pinyin.
-      - Print out the extracted OCR text, the generated pinyin, and the word mapping from Awesome-Align.
-      
-    Parameters:
-      image_path: The path to the image file.
-      orig_img: (Optional) A PIL Image object representing the original image before processing.
-                If None, the function will load the image from image_path.
+      - Display the original image with a single red box (the entire recognized region).
+      - Display the 'after' image with overlayed translations and pinyin.
+      - Print out the extracted OCR text, generated pinyin, and word mapping.
     """
     from PIL import Image, ImageDraw
     import streamlit as st
 
-    # Use the provided original image if available; otherwise load from disk.
-    if orig_img is None:
-        orig_img = Image.open(image_path).convert("RGB")
-    else:
-        orig_img = orig_img.copy()
-
-    # Create the "before" image by drawing red boxes on the original image.
+    orig_img = Image.open(image_path).convert("RGB")
     before_img = orig_img.copy()
     draw_before = ImageDraw.Draw(before_img)
-    
-    # Get OCR annotations from the original image.
+
     annotations = detect_text_boxes(image_path)
     if not annotations:
         st.write("No OCR annotations detected in the image.")
         return
-    
-    for ann in annotations:
-        bbox = bbox_for_annotation(ann)
-        draw_before.rectangle([(bbox[0], bbox[1]), (bbox[2], bbox[3])], outline="red", width=2)
-    
-    # Merge annotations to group overlapping OCR text regions.
-    merged_items = group_annotations(annotations)
-    
-    # Process the image to get the final overlay image and debug information.
-    after_img, text_triplets = overlay_merged_pinyin(image_path, merged_items, font_path=FONT_PATH, margin=MARGIN)
-    
-    # Display the before and after images using Streamlit.
-    st.write("**Before Image (Original with red OCR boxes):**")
+
+    # There's only one annotation: the entire text + single bounding box
+    ann = annotations[0]
+    box = ann["bbox"]
+    draw_before.rectangle([(box[0], box[1]), (box[2], box[3])], outline="red", width=2)
+
+    after_img, text_triplets = overlay_merged_pinyin(image_path, ann, font_path=FONT_PATH, margin=MARGIN)
+
+    # Show images
+    st.write("**Before Image (Single bounding box)**")
     st.image(before_img)
-    st.write("**After Image (With overlayed translations and pinyin):**")
+    st.write("**After Image (Overlay)**")
     st.image(after_img)
-    
-    # Print debug info for each merged annotation.
+
+    # Print debug info
     for idx, triplet in enumerate(text_triplets, start=1):
         original_text, (seg_eng, seg_mand, seg_pin), mapping_str, translated_text = triplet
         st.write(f"--- Debug Info for Annotation {idx} ---")
         st.write("**Extracted OCR Text:**", original_text)
-        # Combine pinyin tokens into a single string.
         pinyin_text = " ".join([token for token, color in seg_pin])
         st.write("**Pinyin:**", pinyin_text)
         st.write("**Word Mapping:**", mapping_str)
 
-
 # ------------------ STREAMLIT APP ------------------
 def main():
-    st.title("Batch CBZ Translator with Box Expansion")
+    st.title("Batch CBZ Translator — Single Box per Image")
 
     # Create a placeholder at the top for a download button (we'll fill it later)
     download_placeholder = st.empty()
@@ -685,18 +508,17 @@ def main():
     uploaded_files = st.file_uploader("Upload CBZ Files", type=["cbz"], accept_multiple_files=True)
 
     # --- AUDIO PLAYBACK TO KEEP TAB ACTIVE ---
-    # The following placeholders will handle audio playback and status.
     audio_placeholder = st.empty()
     status_placeholder = st.empty()
 
     if uploaded_files:
-        # Try to load and play the audio file.
+        # Try to load & play the audio file
         try:
             with open("1-hour-and-20-minutes-of-silence.mp3", "rb") as audio_file:
                 audio_bytes = audio_file.read()
             audio_placeholder.audio(audio_bytes, format="audio/mp3")
             status_placeholder.info("Audio is playing...")
-        except Exception as e:
+        except Exception:
             status_placeholder.warning("Audio file not found. Audio playback skipped.")
 
         progress_bar = st.progress(0)
@@ -716,19 +538,15 @@ def main():
 
             # Process each image
             for img_path in images:
+                # Debug print if desired
+                debug_print_ocr_details(img_path)
 
-                # Load the original image before processing.
-                original_image = Image.open(img_path).convert("RGB")
-                
-                # Call the debug function using the original image copy.
-                debug_print_ocr_details(img_path, orig_img=original_image)
-                
-                # Then continue with your processing.
-                annotations = detect_text_boxes(img_path)
-                if annotations:
-                    merged_items = group_annotations(annotations)
+                # Then do normal final processing
+                ann_list = detect_text_boxes(img_path)
+                if ann_list:
+                    # There's only one item
                     final_img, _ = overlay_merged_pinyin(
-                        img_path, merged_items,
+                        img_path, ann_list[0],
                         font_path=FONT_PATH,
                         margin=MARGIN
                     )
@@ -755,7 +573,7 @@ def main():
 
         final_zip.seek(0)
 
-        # Trigger a browser notification using JavaScript.
+        # Trigger a browser notification using JavaScript
         st.markdown(
             """
             <script>
@@ -778,7 +596,7 @@ def main():
             unsafe_allow_html=True
         )
 
-        # Place the download button in our placeholder *at the top*
+        # Download button
         download_placeholder.download_button(
             label="Download Processed CBZ Files (ZIP)",
             data=final_zip,
@@ -786,7 +604,7 @@ def main():
             mime="application/zip"
         )
 
-        # Add a button to manually stop the audio (since we cannot detect the download event automatically)
+        # Button to stop audio
         if st.button("Stop Audio"):
             audio_placeholder.empty()
             status_placeholder.info("Audio stopped.")
