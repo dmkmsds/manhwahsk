@@ -755,13 +755,10 @@ def debug_print_ocr_details(image_path, orig_img=None):
 # ------------------ STREAMLIT APP ------------------
 def main():
     st.title("Batch CBZ Translator with Box Expansion")
-
-    # Create a placeholder at the top for a download button (we'll fill it later)
     download_placeholder = st.empty()
 
     if "session_id" not in st.session_state:
         st.session_state["session_id"] = str(uuid.uuid4())
-
     session_id = st.session_state["session_id"]
     base_temp_folder = f"temp_processing_{session_id}"
     output_folder = f"processed_cbz_output_{session_id}"
@@ -775,12 +772,10 @@ def main():
     uploaded_files = st.file_uploader("Upload CBZ Files", type=["cbz"], accept_multiple_files=True)
 
     # --- AUDIO PLAYBACK TO KEEP TAB ACTIVE ---
-    # The following placeholders will handle audio playback and status.
     audio_placeholder = st.empty()
     status_placeholder = st.empty()
 
     if uploaded_files:
-        # Try to load and play the audio file.
         try:
             with open("1-hour-and-20-minutes-of-silence.mp3", "rb") as audio_file:
                 audio_bytes = audio_file.read()
@@ -799,53 +794,50 @@ def main():
             with open(temp_cbz_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
 
-            # Extract images
+            # Extract images from CBZ
             temp_extract_folder = os.path.join(base_temp_folder, f"extract_{uuid.uuid4().hex}")
             os.makedirs(temp_extract_folder, exist_ok=True)
             images = extract_cbz(temp_cbz_path, temp_extract_folder)
 
             # Process each image
             for img_path in images:
-
-                # Load the original image before processing.
+                # Load original image for debugging
                 original_image = Image.open(img_path).convert("RGB")
-                
-                # Call the debug function using the original image copy.
                 debug_print_ocr_details(img_path, orig_img=original_image)
-                
-                # Then continue with your processing.
+
+                # Detect block-level items and merge close blocks (with hyphen cleanup)
                 block_items = detect_blocks(img_path)
                 if block_items:
+                    merged_blocks = combine_close_blocks(block_items, threshold=10)
                     final_img, _ = overlay_merged_pinyin(
-                        img_path, block_items,
+                        img_path,
+                        merged_blocks,
                         font_path=FONT_PATH,
                         margin=MARGIN
                     )
                     final_img.save(img_path)
 
-
-            # Repack to CBZ
+            # Repack processed images into a new CBZ
             output_cbz_path = os.path.join(output_folder, cbz_filename)
             repack_to_cbz(temp_extract_folder, output_cbz_path)
             processed_cbz_paths.append(output_cbz_path)
 
-            # Cleanup
+            # Cleanup extraction folder for current CBZ
             shutil.rmtree(temp_extract_folder)
             progress_bar.progress(idx / total_files)
 
         st.success("Processing complete!")
 
-        # Create a ZIP of all processed CBZ
+        # Create ZIP of processed CBZ files
         final_zip = io.BytesIO()
         with zipfile.ZipFile(final_zip, "w") as zf:
             for file in sorted(os.listdir(output_folder)):
                 if file.lower().endswith(".cbz"):
                     full_path = os.path.join(output_folder, file)
                     zf.write(full_path, arcname=file)
-
         final_zip.seek(0)
 
-        # Trigger a browser notification using JavaScript.
+        # Trigger browser notification via JavaScript
         st.markdown(
             """
             <script>
@@ -868,7 +860,7 @@ def main():
             unsafe_allow_html=True
         )
 
-        # Place the download button in our placeholder *at the top*
+        # Download button for final ZIP
         download_placeholder.download_button(
             label="Download Processed CBZ Files (ZIP)",
             data=final_zip,
@@ -876,12 +868,10 @@ def main():
             mime="application/zip"
         )
 
-        # Add a button to manually stop the audio (since we cannot detect the download event automatically)
         if st.button("Stop Audio"):
             audio_placeholder.empty()
             status_placeholder.info("Audio stopped.")
 
-    # Optional button to reset
     if st.button("Clear My Session Files"):
         shutil.rmtree(base_temp_folder, ignore_errors=True)
         shutil.rmtree(output_folder, ignore_errors=True)
@@ -890,3 +880,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
