@@ -1,4 +1,4 @@
-import json 
+import json
 import streamlit as st
 import os
 import zipfile
@@ -380,13 +380,22 @@ def merge_boxes_and_text(boxA, boxB, textA, textB):
     merged_text = textA + " " + textB
     return merged_box, merged_text
 
+def remove_hyphenation(text):
+    """
+    Remove hyphenation artifacts from OCR text where a hyphen at the end of a line 
+    is immediately followed by a newline and the continuation of the word.
+    For example, "exam-\nple" becomes "example".
+    """
+    return re.sub(r'-\s*\n\s*', '', text)
+
 def group_annotations(annotations):
     """
     Merges overlapping text boxes into single items with combined text.
     """
     items = []
     for ann in annotations:
-        items.append({"bbox": bbox_for_annotation(ann), "text": ann.description})
+        cleaned_text = remove_hyphenation(ann.description)
+        items.append({"bbox": bbox_for_annotation(ann), "text": cleaned_text})
     merged = True
     while merged:
         merged = False
@@ -578,24 +587,22 @@ def main():
         os.makedirs(output_folder)
 
     st.write("Upload multiple CBZ files (only for your session).")
-
+    uploaded_files = st.file_uploader("Upload CBZ Files", type=["cbz"], accept_multiple_files=True)
 
     # --- AUDIO PLAYBACK TO KEEP TAB ACTIVE ---
     # The following placeholders will handle audio playback and status.
     audio_placeholder = st.empty()
     status_placeholder = st.empty()
 
-    # Try to load and play the audio file.
-    
-    with open("1-hour-and-20-minutes-of-silence.mp3", "rb") as audio_file:
-        audio_bytes = audio_file.read()
-    audio_placeholder.audio(audio_bytes, format="audio/mp3")
-    status_placeholder.info("Audio is playing...")
-
-    
-    uploaded_files = st.file_uploader("Upload CBZ Files", type=["cbz"], accept_multiple_files=True)
-
     if uploaded_files:
+        # Try to load and play the audio file.
+        try:
+            with open("1-hour-and-20-minutes-of-silence.mp3", "rb") as audio_file:
+                audio_bytes = audio_file.read()
+            audio_placeholder.audio(audio_bytes, format="audio/mp3")
+            status_placeholder.info("Audio is playing...")
+        except Exception as e:
+            status_placeholder.warning("Audio file not found. Audio playback skipped.")
 
         progress_bar = st.progress(0)
         total_files = len(uploaded_files)
@@ -644,8 +651,6 @@ def main():
                     zf.write(full_path, arcname=file)
 
         final_zip.seek(0)
-
-
 
         # Trigger a browser notification using JavaScript.
         st.markdown(
