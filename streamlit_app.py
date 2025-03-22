@@ -382,15 +382,28 @@ def merge_boxes_and_text(boxA, boxB, textA, textB):
 
 def remove_hyphenation(text):
     """
-    Removes common hyphenation artifacts from OCR text, e.g.:
-      "exam-\nple" => "example"
-      "infor- mation" => "information"
+    Attempt to fix common hyphenation issues from OCR, e.g.:
+      "IMPOR- TANT" => "IMPORTANT"
+      "INFOR- MATION." => "INFORMATION."
+      "infor-\n mation" => "information"
     """
-    # Remove dash + optional newlines/spaces in the middle of words.
-    # For instance: "infor- mation" => "information"
-    #              "infor-\n mation" => "information"
-    text = re.sub(r'(\w)-\s*\n?\s*(\w)', r'\1\2', text)
+    import re
+
+    # 1) Replace any newlines with a space
+    text = text.replace("\n", " ")
+
+    # 2) Convert em dashes or en dashes to a normal dash
+    text = text.replace("—", "-").replace("–", "-")
+
+    # 3) Collapse multiple spaces into one
+    text = re.sub(r"\s+", " ", text)
+
+    # 4) Merge patterns like "word- word" => "wordword"
+    #    Using (\S+)-\s+(\S+) ensures punctuation is included in the groups if it’s next to the word.
+    text = re.sub(r"(\S+)-\s+(\S+)", r"\1\2", text)
+
     return text
+
 
 def group_annotations(annotations):
     """
