@@ -421,7 +421,7 @@ def group_annotations(annotations):
     items = []
     for ann in annotations:
         raw_text = ann["text"]
-        box = bbox_for_annotation(ann)
+        box = ann["bbox"]  # direct dictionary access
         items.append({"bbox": box, "text": raw_text})
     
     # 2. Sort items by their top (min_y), then by left (min_x).
