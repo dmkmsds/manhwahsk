@@ -803,7 +803,7 @@ def main():
             for img_path in images:
                 # Load original image for debugging
                 original_image = Image.open(img_path).convert("RGB")
-                debug_print_ocr_details(img_path, orig_img=original_image)
+                #debug_print_ocr_details(img_path, orig_img=original_image)
 
                 # Detect block-level items and merge close blocks (with hyphen cleanup)
                 block_items = detect_blocks(img_path)
