@@ -385,33 +385,30 @@ def remove_hyphenation(text):
     Attempt to fix common hyphenation issues from OCR, e.g.:
       "IMPOR- TANT" => "IMPORTANT"
       "INFOR- MATION." => "INFORMATION."
-      "infor-\n mation" => "information"
     """
-
     # 1) Replace any newlines with a space
     text = text.replace("\n", " ")
-
+    
     # 2) Convert em dashes or en dashes to a normal dash
-    text = text.replace("—", "-").replace("–", "-").replace("-", "-") 
-
+    text = text.replace("—", "-").replace("–", "-")
+    
     # 3) Collapse multiple spaces into one
     text = re.sub(r"\s+", " ", text)
-
+    
     # 4) Merge patterns like "word- word" => "wordword"
-    #    Using (\S+)-\s+(\S+) ensures punctuation is included in the groups if it’s next to the word.
     text = re.sub(r"(\S+)-\s+(\S+)", r"\1\2", text)
-
+    
     return text
 
 
+
 def group_annotations(annotations):
-    """
-    Merges overlapping text boxes into single items with combined text.
-    """
     items = []
     for ann in annotations:
-        cleaned_text = remove_hyphenation(ann.description)
-        items.append({"bbox": bbox_for_annotation(ann), "text": cleaned_text})
+        # Just store the raw text. Don't call remove_hyphenation here.
+        items.append({"bbox": bbox_for_annotation(ann), "text": ann.description})
+    
+    # Merge pass
     merged = True
     while merged:
         merged = False
@@ -431,7 +428,13 @@ def group_annotations(annotations):
             else:
                 new_items.append(current)
         items = new_items
+
+    # After merging is done, run remove_hyphenation on the final merged text
+    for it in items:
+        it["text"] = remove_hyphenation(it["text"])
+    
     return items
+
 
 # ------------------ HELPER: BOX OVERLAP WITHOUT THRESHOLD ------------------
 def boxes_overlap(boxA, boxB):
