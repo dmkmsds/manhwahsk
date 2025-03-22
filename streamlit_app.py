@@ -382,11 +382,15 @@ def merge_boxes_and_text(boxA, boxB, textA, textB):
 
 def remove_hyphenation(text):
     """
-    Remove hyphenation artifacts from OCR text where a hyphen at the end of a line 
-    is immediately followed by a newline and the continuation of the word.
-    For example, "exam-\nple" becomes "example".
+    Removes common hyphenation artifacts from OCR text, e.g.:
+      "exam-\nple" => "example"
+      "infor- mation" => "information"
     """
-    return re.sub(r'-\s*\n\s*', '', text)
+    # Remove dash + optional newlines/spaces in the middle of words.
+    # For instance: "infor- mation" => "information"
+    #              "infor-\n mation" => "information"
+    text = re.sub(r'(\w)-\s*\n?\s*(\w)', r'\1\2', text)
+    return text
 
 def group_annotations(annotations):
     """
