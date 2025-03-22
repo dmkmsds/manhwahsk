@@ -44,6 +44,58 @@ def filter_korean(text):
     filtered_tokens = [tok for tok in tokens if not re.search(r'[\uac00-\ud7a3]', tok)]
     return " ".join(filtered_tokens)
 
+
+
+def detect_text_boxes_document(image_path):
+    """
+    Document Text Detection approach:
+      - Calls vision_client.document_text_detection(image=...)
+      - Iterates over pages → blocks → paragraphs
+      - Returns a list of dicts, each with:
+          {
+            "bbox": (x1, y1, x2, y2),
+            "text": "Paragraph text"
+          }
+      - If you prefer at the block level or the word level, just adjust the loops.
+    """
+    with open(image_path, "rb") as img_file:
+        content = img_file.read()
+    image = vision.Image(content=content)
+    
+    # IMPORTANT: We call document_text_detection instead of text_detection.
+    response = vision_client.document_text_detection(image=image)
+    
+    # If there's no text at all, return empty
+    if not response.full_text_annotation:
+        return []
+    
+    annotations = []
+    # Navigate down: pages → blocks → paragraphs
+    for page in response.full_text_annotation.pages:
+        for block in page.blocks:
+            for paragraph in block.paragraphs:
+                # Collect paragraph text by concatenating all words/symbols
+                para_text = ""
+                for word in paragraph.words:
+                    word_text = "".join([symbol.text for symbol in word.symbols])
+                    para_text += word_text + " "
+                para_text = para_text.strip()
+                
+                # Find bounding box coords for the paragraph
+                vs = paragraph.bounding_box.vertices
+                xs = [v.x for v in vs]
+                ys = [v.y for v in vs]
+                x1, y1 = min(xs), min(ys)
+                x2, y2 = max(xs), max(ys)
+                
+                annotations.append({
+                    "bbox": (x1, y1, x2, y2),
+                    "text": para_text
+                })
+    
+    return annotations
+
+
 def split_into_sentences(text):
     """
     Naive approach to split text into sentences based on '.', '?', and '!' delimiters.
@@ -219,21 +271,37 @@ def bbox_for_annotation(ann):
 
 def detect_text_boxes(image_path):
     """
-    Approach A: Use text_annotations[0] => entire recognized text in reading order as a single bounding box.
-    Returns a list with one item: {'bbox': (x1,y1,x2,y2), 'text': full_text}.
+    Document Text Detection approach returning multiple bounding boxes
+    (one per paragraph).
     """
     with open(image_path, "rb") as img_file:
         content = img_file.read()
     image = vision.Image(content=content)
-    response = vision_client.text_detection(image=image)
-    if not response.text_annotations:
+
+    response = vision_client.document_text_detection(image=image)
+    if not response.full_text_annotation:
         return []
-    # text_annotations[0] is the entire recognized text
-    big_annot = response.text_annotations[0]
-    full_text = big_annot.description
-    # Convert bounding_poly => our custom (min_x, min_y, max_x, max_y)
-    full_box = bbox_for_annotation(big_annot)
-    return [{"bbox": full_box, "text": full_text}]
+
+    annotations = []
+    for page in response.full_text_annotation.pages:
+        for block in page.blocks:
+            for paragraph in block.paragraphs:
+                # build paragraph text
+                para_text = ""
+                for word in paragraph.words:
+                    word_text = "".join([symbol.text for symbol in word.symbols])
+                    para_text += word_text + " "
+                para_text = para_text.strip()
+
+                vs = paragraph.bounding_box.vertices
+                xs = [v.x for v in vs]
+                ys = [v.y for v in vs]
+                x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+
+                annotations.append({"bbox": (x1, y1, x2, y2), "text": para_text})
+
+    return annotations
+
 
 # ------------------ AWESOME-ALIGN MODEL ------------------
 @st.cache_resource
