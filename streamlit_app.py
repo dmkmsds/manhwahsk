@@ -403,12 +403,26 @@ def remove_hyphenation(text):
 
 
 def group_annotations(annotations):
+    """
+    Merges overlapping text boxes into single items with combined text.
+    Now sorts bounding boxes top-to-bottom, left-to-right before merging
+    so that final text is in a more natural reading order.
+    """
+    # 1. Convert each annotation into (bbox, text) but do NOT remove hyphenation yet.
     items = []
     for ann in annotations:
-        # Just store the raw text. Don't call remove_hyphenation here.
-        items.append({"bbox": bbox_for_annotation(ann), "text": ann.description})
+        raw_text = ann.description
+        box = bbox_for_annotation(ann)
+        items.append({"bbox": box, "text": raw_text})
     
-    # Merge pass
+    # 2. Sort items by their top (min_y), then by left (min_x).
+    #    This should help preserve reading order when we merge text.
+    def sort_key(item):
+        x1, y1, x2, y2 = item["bbox"]
+        return (y1, x1)  # sort by top first, then left
+    items.sort(key=sort_key)
+    
+    # 3. Merge pass
     merged = True
     while merged:
         merged = False
@@ -429,11 +443,12 @@ def group_annotations(annotations):
                 new_items.append(current)
         items = new_items
 
-    # After merging is done, run remove_hyphenation on the final merged text
+    # 4. After merging is done, do final hyphenation cleanup on each merged text.
     for it in items:
         it["text"] = remove_hyphenation(it["text"])
     
     return items
+
 
 
 # ------------------ HELPER: BOX OVERLAP WITHOUT THRESHOLD ------------------
