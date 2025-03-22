@@ -154,7 +154,7 @@ def draw_wrapped_lines(draw, lines, font, start_x, start_y, max_width):
 
 
 
-def detect_paragraphs(image_path):
+def detect_blocks(image_path):
     with open(image_path, "rb") as img_file:
         content = img_file.read()
     image = vision.Image(content=content)
@@ -164,27 +164,28 @@ def detect_paragraphs(image_path):
     if not annotation or not annotation.pages:
         return []
 
-    paragraphs = []
+    blocks = []
     for page in annotation.pages:
         for block in page.blocks:
+            # Reconstruct block text by concatenating all paragraphs in the block
+            block_text = ""
             for paragraph in block.paragraphs:
-                # Reconstruct paragraph text by concatenating word symbols
-                paragraph_words = []
-                for word in paragraph.words:
-                    word_text = "".join(symbol.text for symbol in word.symbols)
-                    paragraph_words.append(word_text)
-                paragraph_text = " ".join(paragraph_words)
+                paragraph_text = " ".join("".join(symbol.text for symbol in word.symbols)
+                                            for word in paragraph.words)
+                block_text += paragraph_text + " "
+            block_text = block_text.strip()
 
-                # Convert the paragraph's bounding_poly vertices into a simple box
-                vertices = [(v.x, v.y) for v in paragraph.bounding_box.vertices]
-                xs, ys = zip(*vertices)
-                bbox = (min(xs), min(ys), max(xs), max(ys))
+            # Convert the block's bounding_poly vertices into a simple box
+            vertices = [(v.x, v.y) for v in block.bounding_box.vertices]
+            xs, ys = zip(*vertices)
+            bbox = (min(xs), min(ys), max(xs), max(ys))
 
-                paragraphs.append({
-                    "bbox": bbox,
-                    "text": paragraph_text
-                })
-    return paragraphs
+            blocks.append({
+                "bbox": bbox,
+                "text": block_text
+            })
+    return blocks
+
 
 
 # ------------------ CBZ HANDLING ------------------
@@ -665,10 +666,10 @@ def debug_print_ocr_details(image_path, orig_img=None):
     draw_before = ImageDraw.Draw(before_img)
     
     # Get OCR annotations from the original image.
-    paragraph_items = detect_paragraphs(image_path)
+    block_items = detect_blocks(image_path)
     
     # Process the image to get the final overlay image and debug information.
-    after_img, text_triplets = overlay_merged_pinyin(image_path, paragraph_items, font_path=FONT_PATH, margin=MARGIN)
+    after_img, text_triplets = overlay_merged_pinyin(image_path, block_items, font_path=FONT_PATH, margin=MARGIN)
     
     # Display the before and after images using Streamlit.
     st.write("**Before Image (Original with red OCR boxes):**")
@@ -749,14 +750,15 @@ def main():
                 debug_print_ocr_details(img_path, orig_img=original_image)
                 
                 # Then continue with your processing.
-                paragraph_items = detect_paragraphs(img_path)
-                if paragraph_items:
+                block_items = detect_blocks(img_path)
+                if block_items:
                     final_img, _ = overlay_merged_pinyin(
-                        img_path, paragraph_items,
+                        img_path, block_items,
                         font_path=FONT_PATH,
                         margin=MARGIN
                     )
                     final_img.save(img_path)
+
 
             # Repack to CBZ
             output_cbz_path = os.path.join(output_folder, cbz_filename)
