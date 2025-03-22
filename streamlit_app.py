@@ -570,53 +570,63 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 
 
 
-def debug_print_ocr_details(image_path):
+def debug_print_ocr_details(image_path, orig_img=None):
     """
     Debug function to:
-      - Display the before image with red boxes drawn around the detected OCR regions.
-      - Display the after image with overlayed translations and pinyin.
+      - Display the original (before) image with red boxes drawn around the detected OCR regions.
+      - Display the processed (after) image with overlayed translations and pinyin.
       - Print out the extracted OCR text, the generated pinyin, and the word mapping from Awesome-Align.
+      
+    Parameters:
+      image_path: The path to the image file.
+      orig_img: (Optional) A PIL Image object representing the original image before processing.
+                If None, the function will load the image from image_path.
     """
     from PIL import Image, ImageDraw
     import streamlit as st
 
-    # Load original image
-    orig_img = Image.open(image_path).convert("RGB")
+    # Use the provided original image if available; otherwise load from disk.
+    if orig_img is None:
+        orig_img = Image.open(image_path).convert("RGB")
+    else:
+        orig_img = orig_img.copy()
+
+    # Create the "before" image by drawing red boxes on the original image.
+    before_img = orig_img.copy()
+    draw_before = ImageDraw.Draw(before_img)
     
-    # Get OCR annotations from the image
+    # Get OCR annotations from the original image.
     annotations = detect_text_boxes(image_path)
     if not annotations:
         st.write("No OCR annotations detected in the image.")
         return
     
-    # Create a "before" image: copy the original and draw red boxes around each detected OCR area
-    before_img = orig_img.copy()
-    draw_before = ImageDraw.Draw(before_img)
     for ann in annotations:
         bbox = bbox_for_annotation(ann)
         draw_before.rectangle([(bbox[0], bbox[1]), (bbox[2], bbox[3])], outline="red", width=2)
     
-    # Merge annotations to group overlapping OCR text regions
+    # Merge annotations to group overlapping OCR text regions.
     merged_items = group_annotations(annotations)
     
-    # Process the image to get the final overlay image and debug information (text_triplets)
+    # Process the image to get the final overlay image and debug information.
     after_img, text_triplets = overlay_merged_pinyin(image_path, merged_items, font_path=FONT_PATH, margin=MARGIN)
     
-    # Display the before and after images using Streamlit
-    st.write("**Before Image (with red boxes on OCR regions):**")
+    # Display the before and after images using Streamlit.
+    st.write("**Before Image (Original with red OCR boxes):**")
     st.image(before_img)
-    st.write("**After Image (with overlayed translations and pinyin):**")
+    st.write("**After Image (With overlayed translations and pinyin):**")
     st.image(after_img)
     
-    # For each merged annotation, print debug information
+    # Print debug info for each merged annotation.
     for idx, triplet in enumerate(text_triplets, start=1):
         original_text, (seg_eng, seg_mand, seg_pin), mapping_str, translated_text = triplet
         st.write(f"--- Debug Info for Annotation {idx} ---")
         st.write("**Extracted OCR Text:**", original_text)
-        # Combine pinyin tokens into a single string
+        # Combine pinyin tokens into a single string.
         pinyin_text = " ".join([token for token, color in seg_pin])
         st.write("**Pinyin:**", pinyin_text)
         st.write("**Word Mapping:**", mapping_str)
+
 
 # ------------------ STREAMLIT APP ------------------
 def main():
@@ -673,9 +683,13 @@ def main():
             # Process each image
             for img_path in images:
 
-                # Call the debug function to show details for the current image
-                debug_print_ocr_details(img_path)
+                # Load the original image before processing.
+                original_image = Image.open(img_path).convert("RGB")
                 
+                # Call the debug function using the original image copy.
+                debug_print_ocr_details(img_path, orig_img=original_image)
+                
+                # Then continue with your processing.
                 annotations = detect_text_boxes(img_path)
                 if annotations:
                     merged_items = group_annotations(annotations)
