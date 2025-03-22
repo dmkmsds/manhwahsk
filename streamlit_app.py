@@ -392,7 +392,7 @@ def remove_hyphenation(text):
     text = text.replace("\n", " ")
 
     # 2) Convert em dashes or en dashes to a normal dash
-    text = text.replace("—", "-", "-").replace("–", "-", "-")
+    text = text.replace("—", "-").replace("–", "-").replace("-", "-") 
 
     # 3) Collapse multiple spaces into one
     text = re.sub(r"\s+", " ", text)
