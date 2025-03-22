@@ -387,7 +387,6 @@ def remove_hyphenation(text):
       "INFOR- MATION." => "INFORMATION."
       "infor-\n mation" => "information"
     """
-    import re
 
     # 1) Replace any newlines with a space
     text = text.replace("\n", " ")
