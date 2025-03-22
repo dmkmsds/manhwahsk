@@ -643,9 +643,9 @@ def overlay_merged_pinyin(image_path, items, font_path=FONT_PATH, margin=MARGIN)
 def debug_print_ocr_details(image_path, orig_img=None):
     """
     Debug function to:
-      - Display the original (before) image with red boxes drawn around the detected OCR regions.
+      - Display the original (before) image with red boxes drawn around the detected block regions.
       - Display the processed (after) image with overlayed translations and pinyin.
-      - Print out the extracted OCR text, the generated pinyin, and the word mapping from Awesome-Align.
+      - Print out the extracted block text, the generated pinyin, and the word mapping from Awesome-Align.
       
     Parameters:
       image_path: The path to the image file.
@@ -661,31 +661,42 @@ def debug_print_ocr_details(image_path, orig_img=None):
     else:
         orig_img = orig_img.copy()
 
-    # Create the "before" image by drawing red boxes on the original image.
+    # Create a "before" image copy to draw the block boxes.
     before_img = orig_img.copy()
     draw_before = ImageDraw.Draw(before_img)
     
-    # Get OCR annotations from the original image.
+    # Get block items using your new detect_blocks function.
     block_items = detect_blocks(image_path)
+    if not block_items:
+        st.write("No blocks detected in the image.")
+        return
+    
+    # Draw red boxes for each detected block.
+    for item in block_items:
+        bbox = item["bbox"]
+        draw_before.rectangle([(bbox[0], bbox[1]), (bbox[2], bbox[3])], outline="red", width=2)
+        # Optionally, you can annotate with a snippet of block text:
+        draw_before.text((bbox[0], bbox[1]-10), item["text"][:30] + "...", fill="red")
     
     # Process the image to get the final overlay image and debug information.
     after_img, text_triplets = overlay_merged_pinyin(image_path, block_items, font_path=FONT_PATH, margin=MARGIN)
     
     # Display the before and after images using Streamlit.
-    st.write("**Before Image (Original with red OCR boxes):**")
+    st.write("**Before Image (Original with red block boxes):**")
     st.image(before_img)
     st.write("**After Image (With overlayed translations and pinyin):**")
     st.image(after_img)
     
-    # Print debug info for each merged annotation.
+    # Print debug info for each block.
     for idx, triplet in enumerate(text_triplets, start=1):
         original_text, (seg_eng, seg_mand, seg_pin), mapping_str, translated_text = triplet
-        st.write(f"--- Debug Info for Annotation {idx} ---")
-        st.write("**Extracted OCR Text:**", original_text)
+        st.write(f"--- Debug Info for Block {idx} ---")
+        st.write("**Extracted Block Text:**", original_text)
         # Combine pinyin tokens into a single string.
         pinyin_text = " ".join([token for token, color in seg_pin])
         st.write("**Pinyin:**", pinyin_text)
         st.write("**Word Mapping:**", mapping_str)
+
 
 
 # ------------------ STREAMLIT APP ------------------
