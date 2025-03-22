@@ -187,16 +187,9 @@ def detect_blocks(image_path):
     return blocks
 
 def combine_close_blocks(blocks, threshold=10):
-    """
-    Repeatedly merges any two blocks whose bounding boxes overlap or are
-    within 'threshold' pixels of each other. Returns a new list of merged blocks.
-    """
     def overlap_or_close(boxA, boxB, threshold=10):
-        # box = (xmin, ymin, xmax, ymax)
         Aminx, Aminy, Amaxx, Amaxy = boxA
         Bminx, Bminy, Bmaxx, Bmaxy = boxB
-
-        # Check if horizontally or vertically they are within 'threshold' distance
         if Amaxx < (Bminx - threshold) or Bmaxx < (Aminx - threshold):
             return False
         if Amaxy < (Bminy - threshold) or Bmaxy < (Aminy - threshold):
@@ -204,20 +197,18 @@ def combine_close_blocks(blocks, threshold=10):
         return True
 
     def merge_boxes_and_text(boxA, boxB, textA, textB):
-        # Merge bounding boxes
         Aminx, Aminy, Amaxx, Amaxy = boxA
         Bminx, Bminy, Bmaxx, Bmaxy = boxB
         merged_box = (
-            min(Aminx, Bminx), 
+            min(Aminx, Bminx),
             min(Aminy, Bminy),
-            max(Amaxx, Bmaxx), 
+            max(Amaxx, Bmaxx),
             max(Amaxy, Bmaxy)
         )
-        # Combine text with a space (or newline if you prefer)
-        merged_text = textA + " " + textB
+        merged_text = textA + " " + textB  # combine with a space
         return merged_box, merged_text
 
-    # Sort top-to-bottom, then left-to-right to preserve reading order
+    # Sort top-to-bottom, then left-to-right
     items = sorted(blocks, key=lambda b: (b["bbox"][1], b["bbox"][0]))
 
     merged = True
@@ -228,7 +219,6 @@ def combine_close_blocks(blocks, threshold=10):
             current = items.pop()
             for idx, existing in enumerate(new_items):
                 if overlap_or_close(current["bbox"], existing["bbox"], threshold=threshold):
-                    # Merge them
                     merged_box, merged_text = merge_boxes_and_text(
                         current["bbox"], existing["bbox"],
                         current["text"], existing["text"]
@@ -240,7 +230,13 @@ def combine_close_blocks(blocks, threshold=10):
             else:
                 new_items.append(current)
         items = new_items
+
+    # === Final hyphenation cleanup on each block's text ===
+    for item in items:
+        item["text"] = remove_hyphenation(item["text"])
+
     return items
+
 
 
 # ------------------ CBZ HANDLING ------------------
