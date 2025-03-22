@@ -152,6 +152,43 @@ def draw_wrapped_lines(draw, lines, font, start_x, start_y, max_width):
         start_y += line_height
     return start_y
 
+
+
+def try_expand_box(orig_box, other_boxes, img_width, img_height,
+                   expand_w_factor=0.2, expand_h_factor=0.35,
+                   margin=5, extra_padding=10):
+    """
+    Attempt to expand orig_box by (expand_w_factor * 100)% in width
+    and (expand_h_factor * 100)% in height, plus margin and extra_padding.
+    
+    For a single bounding box scenario, other_boxes can be [].
+    """
+    (min_x, min_y, max_x, max_y) = orig_box
+
+    # Basic expansions for margin + padding
+    min_x = max(0, min_x - margin - extra_padding)
+    min_y = max(0, min_y - margin - extra_padding)
+    max_x = min(img_width, max_x + margin + extra_padding)
+    max_y = min(img_height, max_y + margin + extra_padding)
+
+    original_expanded = (min_x, min_y, max_x, max_y)
+
+    # Expand around center
+    width = max_x - min_x
+    height = max_y - min_y
+    expand_w = width * expand_w_factor
+    expand_h = height * expand_h_factor
+
+    new_min_x = max(0, min_x - expand_w / 2)
+    new_max_x = min(img_width, max_x + expand_w / 2)
+    new_min_y = max(0, min_y - expand_h / 2)
+    new_max_y = min(img_height, max_y + expand_h / 2)
+
+    # Since we’re using a single bounding box, other_boxes is empty,
+    # so we can just return the expanded box directly.
+    return (new_min_x, new_min_y, new_max_x, new_max_y)
+
+
 # ------------------ CBZ HANDLING ------------------
 def extract_cbz(cbz_path, output_folder):
     with zipfile.ZipFile(cbz_path, 'r') as zip_ref:
