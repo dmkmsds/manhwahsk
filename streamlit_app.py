@@ -420,7 +420,7 @@ def group_annotations(annotations):
     # 1. Convert each annotation into (bbox, text) but do NOT remove hyphenation yet.
     items = []
     for ann in annotations:
-        raw_text = ann.description
+        raw_text = ann["text"]
         box = bbox_for_annotation(ann)
         items.append({"bbox": box, "text": raw_text})
     
