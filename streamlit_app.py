@@ -186,6 +186,61 @@ def detect_blocks(image_path):
             })
     return blocks
 
+def combine_close_blocks(blocks, threshold=10):
+    """
+    Repeatedly merges any two blocks whose bounding boxes overlap or are
+    within 'threshold' pixels of each other. Returns a new list of merged blocks.
+    """
+    def overlap_or_close(boxA, boxB, threshold=10):
+        # box = (xmin, ymin, xmax, ymax)
+        Aminx, Aminy, Amaxx, Amaxy = boxA
+        Bminx, Bminy, Bmaxx, Bmaxy = boxB
+
+        # Check if horizontally or vertically they are within 'threshold' distance
+        if Amaxx < (Bminx - threshold) or Bmaxx < (Aminx - threshold):
+            return False
+        if Amaxy < (Bminy - threshold) or Bmaxy < (Aminy - threshold):
+            return False
+        return True
+
+    def merge_boxes_and_text(boxA, boxB, textA, textB):
+        # Merge bounding boxes
+        Aminx, Aminy, Amaxx, Amaxy = boxA
+        Bminx, Bminy, Bmaxx, Bmaxy = boxB
+        merged_box = (
+            min(Aminx, Bminx), 
+            min(Aminy, Bminy),
+            max(Amaxx, Bmaxx), 
+            max(Amaxy, Bmaxy)
+        )
+        # Combine text with a space (or newline if you prefer)
+        merged_text = textA + " " + textB
+        return merged_box, merged_text
+
+    # Sort top-to-bottom, then left-to-right to preserve reading order
+    items = sorted(blocks, key=lambda b: (b["bbox"][1], b["bbox"][0]))
+
+    merged = True
+    while merged:
+        merged = False
+        new_items = []
+        while items:
+            current = items.pop()
+            for idx, existing in enumerate(new_items):
+                if overlap_or_close(current["bbox"], existing["bbox"], threshold=threshold):
+                    # Merge them
+                    merged_box, merged_text = merge_boxes_and_text(
+                        current["bbox"], existing["bbox"],
+                        current["text"], existing["text"]
+                    )
+                    new_items[idx]["bbox"] = merged_box
+                    new_items[idx]["text"] = merged_text
+                    merged = True
+                    break
+            else:
+                new_items.append(current)
+        items = new_items
+    return items
 
 
 # ------------------ CBZ HANDLING ------------------
@@ -667,19 +722,21 @@ def debug_print_ocr_details(image_path, orig_img=None):
     
     # Get block items using your new detect_blocks function.
     block_items = detect_blocks(image_path)
+    merged_blocks = combine_close_blocks(block_items, threshold=10)
+
     if not block_items:
         st.write("No blocks detected in the image.")
         return
     
     # Draw red boxes for each detected block.
-    for item in block_items:
+    for item in merged_blocks:
         bbox = item["bbox"]
         draw_before.rectangle([(bbox[0], bbox[1]), (bbox[2], bbox[3])], outline="red", width=2)
         # Optionally, you can annotate with a snippet of block text:
         draw_before.text((bbox[0], bbox[1]-10), item["text"][:30] + "...", fill="red")
     
     # Process the image to get the final overlay image and debug information.
-    after_img, text_triplets = overlay_merged_pinyin(image_path, block_items, font_path=FONT_PATH, margin=MARGIN)
+    after_img, text_triplets = overlay_merged_pinyin(image_path, merged_blocks, font_path=FONT_PATH, margin=MARGIN)
     
     # Display the before and after images using Streamlit.
     st.write("**Before Image (Original with red block boxes):**")
