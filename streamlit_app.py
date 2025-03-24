@@ -770,6 +770,10 @@ def main():
 
 
 
+    # --- AUDIO PLAYBACK TO KEEP TAB ACTIVE ---
+    audio_placeholder = st.empty()
+    status_placeholder = st.empty()
+    
     try:
         with open("1-hour-and-20-minutes-of-silence.mp3", "rb") as audio_file:
             audio_bytes = audio_file.read()
@@ -777,13 +781,10 @@ def main():
         status_placeholder.info("Audio is playing...")
     except Exception as e:
         status_placeholder.warning("Audio file not found. Audio playback skipped.")
-
+        
     st.write("Upload multiple CBZ files (only for your session).")
     uploaded_files = st.file_uploader("Upload CBZ Files", type=["cbz"], accept_multiple_files=True)
 
-    # --- AUDIO PLAYBACK TO KEEP TAB ACTIVE ---
-    audio_placeholder = st.empty()
-    status_placeholder = st.empty()
 
     if uploaded_files:
         progress_bar = st.progress(0)
