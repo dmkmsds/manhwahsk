@@ -171,9 +171,13 @@ def detect_blocks(image_path):
             block_text = ""
             for paragraph in block.paragraphs:
                 paragraph_text = " ".join("".join(symbol.text for symbol in word.symbols)
-                                            for word in paragraph.words)
+                                          for word in paragraph.words)
                 block_text += paragraph_text + " "
             block_text = block_text.strip()
+
+            # --- NEW: Skip blocks with less than 3 words ---
+            if len(block_text.split()) < 3:
+                continue
 
             # Convert the block's bounding_poly vertices into a simple box
             vertices = [(v.x, v.y) for v in block.bounding_box.vertices]
@@ -185,6 +189,7 @@ def detect_blocks(image_path):
                 "text": block_text
             })
     return blocks
+
 
 def combine_close_blocks(blocks, threshold=10):
     def overlap_or_close(boxA, boxB, threshold=10):
