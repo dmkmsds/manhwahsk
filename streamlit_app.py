@@ -158,11 +158,7 @@ def detect_blocks(image_path):
     with open(image_path, "rb") as img_file:
         content = img_file.read()
     image = vision.Image(content=content)
-
-    # 🔹 NEW: Use image_context to enable stricter text filtering
-    image_context = vision.ImageContext(language_hints=["en"])  # Language hints improve accuracy
-
-    response = vision_client.document_text_detection(image=image, image_context=image_context)
+    response = vision_client.document_text_detection(image=image)
     annotation = response.full_text_annotation
 
     if not annotation or not annotation.pages:
@@ -171,25 +167,15 @@ def detect_blocks(image_path):
     blocks = []
     for page in annotation.pages:
         for block in page.blocks:
+            # Reconstruct block text by concatenating all paragraphs in the block
             block_text = ""
-            confidence_scores = []  # Store confidence scores
-
             for paragraph in block.paragraphs:
-                paragraph_text = ""
-                for word in paragraph.words:
-                    word_text = "".join(symbol.text for symbol in word.symbols)
-                    confidence_scores.append(word.confidence)  # 🔹 Store confidence score
-                    paragraph_text += word_text
+                paragraph_text = " ".join("".join(symbol.text for symbol in word.symbols)
+                                            for word in paragraph.words)
                 block_text += paragraph_text + " "
-
             block_text = block_text.strip()
 
-            # 🔹 NEW: Apply confidence threshold
-            if confidence_scores:
-                avg_confidence = sum(confidence_scores) / len(confidence_scores)
-                if avg_confidence < 0.85:  # Adjust threshold if necessary
-                    continue  # Skip low-confidence text blocks
-
+            # Convert the block's bounding_poly vertices into a simple box
             vertices = [(v.x, v.y) for v in block.bounding_box.vertices]
             xs, ys = zip(*vertices)
             bbox = (min(xs), min(ys), max(xs), max(ys))
@@ -199,7 +185,6 @@ def detect_blocks(image_path):
                 "text": block_text
             })
     return blocks
-
 
 def combine_close_blocks(blocks, threshold=10):
     def overlap_or_close(boxA, boxB, threshold=10):
@@ -277,24 +262,11 @@ def detect_text_boxes(image_path):
     with open(image_path, "rb") as img_file:
         content = img_file.read()
     image = vision.Image(content=content)
-
-    # 🔹 NEW: Add image_context to enforce confidence filtering
-    image_context = vision.ImageContext(language_hints=["en"])
-
-    response = vision_client.text_detection(image=image, image_context=image_context)
+    response = vision_client.text_detection(image=image)
     if not response.text_annotations:
         return []
-
-    filtered_boxes = []
-    for annotation in response.text_annotations[1:]:
-        text = annotation.description
-        confidence = annotation.confidence if hasattr(annotation, 'confidence') else 1.0  # 🔹 Get confidence score
-
-        if confidence >= 0.85:  # 🔹 Filter low-confidence detections
-            filtered_boxes.append(annotation)
-
-    return filtered_boxes
-
+    # text_annotations[0] is entire text, skip that
+    return response.text_annotations[1:]
 
 # ------------------ AWESOME-ALIGN MODEL ------------------
 @st.cache_resource
@@ -911,4 +883,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
