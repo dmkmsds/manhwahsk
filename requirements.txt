@@ -1,9 +1,8 @@
-streamlit
-google-cloud-vision
-google-cloud-translate
-pypinyin
-jieba
+streamlit>=1.44.1
+google-cloud-vision>=3.10.1
+google-cloud-translate>=3.20.2
+pypinyin>=0.54.0
+jieba>=0.42.1
 transformers==4.29.2
 torch==2.2.1
-torchvision
-tokenizers==0.13.1
+torchvision==0.21.0
