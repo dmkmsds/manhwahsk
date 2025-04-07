@@ -6,3 +6,4 @@ jieba
 transformers==4.30.0
 torch==2.2.1
 torchvision==0.15.2
+accelerate
