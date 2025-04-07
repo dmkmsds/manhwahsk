@@ -15,6 +15,14 @@ from pypinyin import lazy_pinyin, Style
 import jieba
 from transformers import AutoTokenizer, AutoModel
 
+
+st.write("Checking internet...")
+try:
+    import requests
+    st.write(requests.get("https://huggingface.co").status_code)
+except Exception as e:
+    st.write("Internet error:", e)
+
 # ------------------ LOAD GOOGLE CLOUD CREDENTIALS FROM SECRETS ------------------
 if "google_cloud" in st.secrets:
     creds_dict = dict(st.secrets["google_cloud"])  # Already a dict
