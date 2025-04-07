@@ -4,5 +4,5 @@ google-cloud-translate
 pypinyin
 jieba
 transformers
-torch
+torch==2.2.0
 torchvision
