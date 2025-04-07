@@ -284,8 +284,10 @@ def detect_text_boxes(image_path):
 # ------------------ AWESOME-ALIGN MODEL ------------------
 @st.cache_resource
 def load_awesome_align_model():
-    model = AutoModel.from_pretrained("aneuraz/awesome-align-with-co")
-    tokenizer = AutoTokenizer.from_pretrained("aneuraz/awesome-align-with-co")
+    model = AutoModel.from_pretrained("aneuraz/awesome-align-with-co",
+                                     use_auth_token = "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")
+    tokenizer = AutoTokenizer.from_pretrained("aneuraz/awesome-align-with-co",
+                                             use_auth_token = "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")
     return model, tokenizer
 
 def awesome_align(english_text, chinese_text):
