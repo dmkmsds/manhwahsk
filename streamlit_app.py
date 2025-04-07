@@ -14,7 +14,7 @@ from google.cloud import translate_v2 as translate
 from pypinyin import lazy_pinyin, Style
 import jieba
 from transformers import AutoTokenizer, AutoModel
-
+frok transformers.utils import init_empty_weights
 
 st.write("Checking internet...")
 try:
