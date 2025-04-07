@@ -6,3 +6,4 @@ jieba
 transformers==4.29.2
 torch==2.2.1
 torchvision
+tokenizers==0.13.1
