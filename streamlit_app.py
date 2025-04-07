@@ -15,6 +15,7 @@ from pypinyin import lazy_pinyin, Style
 import jieba
 from transformers import AutoTokenizer, AutoModel
 
+torch.classes.__path__ = []
 
 st.write("Checking internet...")
 try:
