@@ -1,3 +1,4 @@
+streamlit 
 google-cloud-vision
 google-cloud-translate
 pypinyin
