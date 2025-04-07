@@ -1,3 +1,6 @@
+!pip install --upgrade pip
+
+
 import json
 import streamlit as st
 import os
