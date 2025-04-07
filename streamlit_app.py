@@ -24,12 +24,39 @@ except Exception as e:
     st.write("Internet error:", e)
 
 # ------------------ LOAD GOOGLE CLOUD CREDENTIALS FROM SECRETS ------------------
-if "google_cloud" in st.secrets:
-    creds_dict = dict(st.secrets["google_cloud"])  # Already a dict
+def configure_google_credentials():
+    """
+    so now if wanna run locally in codespace just need to export GOOGLE_CREDS_JSON and then the json file.
+    Load Google Cloud service account credentials either from an environment
+    variable (GOOGLE_CREDS_JSON) or from st.secrets['google_cloud'].
+    Then write them to a temp file and set GOOGLE_APPLICATION_CREDENTIALS.
+    """
+    creds_dict = None
+
+    # 1) Check if credentials are supplied via environment variable
+    if "GOOGLE_CREDS_JSON" in os.environ:
+        # Parse JSON from the env variable
+        creds_dict = json.loads(os.environ["GOOGLE_CREDS_JSON"])
+
+    # 2) Else check if credentials are in st.secrets
+    elif "google_cloud" in st.secrets:
+        creds_dict = dict(st.secrets["google_cloud"])
+
+    # 3) If neither is found, raise an error
+    else:
+        st.error("No Google Cloud credentials found. Please set GOOGLE_CREDS_JSON or st.secrets['google_cloud'].")
+        return
+
+    # 4) Write the loaded credentials dict to a temp file
     creds_path = "temp_google_credentials.json"
     with open(creds_path, "w") as f:
         json.dump(creds_dict, f)
+
+    # 5) Set the GOOGLE_APPLICATION_CREDENTIALS env var
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+
+# Example usage:
+configure_google_credentials()
 
 # ------------------ HELPER FUNCTIONS ------------------
 def is_all_korean(text):
