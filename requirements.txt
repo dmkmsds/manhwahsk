@@ -1,6 +1,6 @@
 streamlit
-google-cloud-vision==3.20.1
-google-cloud-translate==3.10.0
+google-cloud-vision==3.10.0
+google-cloud-translate==3.20.1
 pypinyin==0.53.0
 jieba
 transformers==4.49.0
