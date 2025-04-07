@@ -4,5 +4,6 @@ google-cloud-translate
 pypinyin
 jieba
 transformers==4.29.2
-torch==1.13.1
-torchvision==0.14.1
+torch==2.2.1
+torchvision==0.15.2
+
