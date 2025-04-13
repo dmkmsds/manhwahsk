@@ -7,7 +7,7 @@ pypinyin==0.53.0
 jieba==0.42.1
 transformers==4.49.0
 torch==2.2.1
-torchvision
+#torchvision
 #==0.15.1
 
 
