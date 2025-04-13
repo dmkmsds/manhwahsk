@@ -1,6 +1,6 @@
 #pip>=23.0
-#numpy<2
-streamlit==1.44.1
+numpy<2
+streamlit
 google-cloud-vision==3.10.0
 google-cloud-translate==3.20.1
 pypinyin==0.53.0
@@ -8,3 +8,15 @@ jieba==0.42.1
 transformers==4.29.2
 torch==2.0.1
 torchvision==0.15.1
+
+
+
+
+#streamlit
+#google-cloud-vision==3.10.0
+#google-cloud-translate==3.20.1
+#pypinyin==0.53.0
+#jieba
+#transformers==4.49.0
+#torch==2.2.1
+#torchvision
