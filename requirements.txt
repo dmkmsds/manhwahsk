@@ -1,3 +1,4 @@
+pip>=23.0
 numpy<2
 streamlit==1.44.1
 google-cloud-vision==3.10.0
