@@ -15,8 +15,6 @@ from pypinyin import lazy_pinyin, Style
 import jieba
 from transformers import AutoTokenizer, AutoModel
 
-st.write("TorchVision version:", torchvision.__version__)
-
 
 st.write("Checking internet...")
 try:
