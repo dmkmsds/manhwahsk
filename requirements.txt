@@ -1,9 +1,9 @@
 numpy<2
-streamlit
+streamlit==1.44.1
 google-cloud-vision==3.10.0
 google-cloud-translate==3.20.1
 pypinyin==0.53.0
-jieba
-transformers==4.49.0
-torch==2.2.1
-torchvision
+jieba==0.42.1
+transformers==4.29.2
+torch==2.0.1
+torchvision==0.15.1
