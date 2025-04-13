@@ -1,5 +1,4 @@
---upgrade pip
-
+pip == 25.0.1
 numpy<2
 streamlit
 google-cloud-vision==3.10.0
