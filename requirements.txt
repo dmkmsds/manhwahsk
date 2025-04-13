@@ -1,6 +1,6 @@
-#pip == 25.0.1
-#numpy<2
-streamlit
+pip == 25.0.1
+numpy<2
+streamlit==1.44.1
 google-cloud-vision==3.10.0
 google-cloud-translate==3.20.1
 pypinyin==0.53.0
